@@ -1,0 +1,23 @@
+[package]
+name = "runners"
+version = "0.1.0"
+description = "An editor for teams of local coding agents (Claude Code, Codex, and friends)"
+authors = ["Jason Wang <yuesihan@gmail.com>"]
+edition = "2021"
+
+[lib]
+name = "runners_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-process = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
