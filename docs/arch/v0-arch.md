@@ -101,6 +101,8 @@ A mission is a container. Everything in the runtime column is either the contain
 
 The persistent "who's on the team and how they work together" record. A crew has a name, a default mission goal, a list of runners, an orchestrator policy, and a signal-type allowlist. It does not run. It is blueprint.
 
+**Every crew must have exactly one lead runner.** The lead is the human's counterpart in the crew: mission goals and broadcast human messages route to the lead by default, and the lead dispatches work to the other runners via directed messages. This is a hard invariant — a crew with zero runners or zero leads is invalid and cannot start a mission. The first runner added to a new crew becomes lead automatically; the user can reassign lead between existing runners, but cannot remove the lead runner without first designating a replacement. The lead is a routing convention, not a privileged capability: any runner can emit signals, post directed messages, and trigger orchestrator actions. Lead only governs *where inbound-from-human traffic lands by default*.
+
 Lifecycle: created by the user, edited freely, deleted when no longer needed. Persisted in SQLite.
 
 ### 2.3 Runner — *one configured agent*
@@ -115,6 +117,8 @@ A runner has two identifying fields:
 Keeping these separate means renaming a runner for the UI doesn't break briefs, rules, or historical events. `handle` is the identity; `display_name` is just presentation.
 
 A runner belongs to exactly one crew. Examples: `coder` (claude-code), `reviewer` (claude-code), `tester` (shell).
+
+Exactly one runner in a crew carries the `lead` flag (see §2.2). The orchestrator treats the lead as the default recipient of human broadcast messages and the mission-goal inject at startup; other runners receive traffic only when directly addressed. The flag lives on the runner record in SQLite, enforced by a unique partial index: `UNIQUE(crew_id) WHERE lead = 1`.
 
 ### 2.4 Orchestrator Policy — *the crew's decision rules*
 
