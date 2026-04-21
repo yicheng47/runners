@@ -154,10 +154,11 @@ Runners don't share a programming model; they share an IM-like surface. The same
 | Primitive | Role | v0 | v0.x | v1+ |
 |---|---|:---:|:---:|:---:|
 | **Signal** | Typed notification; orchestrator routes on these. Verb grammar. | ✅ | | |
-| **Message** | Prose posted to the mission stream. Runner-to-runner conversation. | ✅ | | |
+| **Message** | Prose, broadcast or directed to a specific runner. | ✅ | | |
+| **Inbox** | Per-runner projection: broadcasts + messages addressed to me. | ✅ | | |
 | **Thread** | Scoped sub-conversation within a mission. | | ✅ | |
 | **Fact** | KV whiteboard; "what is currently true in this mission." | | ✅ | |
-| **Mention** | Targeted `@name` inside a message. | | | ✅ |
+| **Mention** | Targeted `@name` inside a message's prose (lighter-weight than `--to`). | | | ✅ |
 | **Reaction** | Lightweight signal attached to a message (`👍`, `🔍`, `blocking`). | | | ✅ |
 
 #### 2.7.1 Signal — *"something happened, please decide"*
@@ -172,27 +173,48 @@ A signal carries an optional `payload` (JSON) but the payload is meant for the o
 
 #### 2.7.2 Message — *"here's what I think"*
 
-Prose, posted to the mission's flat stream. Runner-to-runner (and human-readable). Grammar: sentence.
+Prose, addressed either to the mission (broadcast) or to a specific crewmate (direct). Runner-to-runner (and human-readable). Grammar: sentence.
+
+Two shapes:
+- **Broadcast** — `runners msg post "<text>"`. Goes to everyone's inbox. Use for status updates, open questions, mission-wide announcements.
+- **Direct** — `runners msg post --to <runner> "<text>"`. Goes to that runner's inbox only. Use for targeted questions, replies, or private back-and-forth.
 
 Examples:
-- `"Branch feat/x is ready. Touched auth.rs and session.rs."`
-- `"Line 47 in auth.rs: null check missing when the token is expired."`
-- `"Kept the 30s timeout — provider is slow on cold start."`
+- broadcast: `"Branch feat/x is ready. Touched auth.rs and session.rs."`
+- direct: `runners msg post --to reviewer "Line 47 in auth.rs: null check missing when the token is expired."`
+- direct reply: `runners msg post --to coder "Kept the 30s timeout — provider is slow on cold start."`
 
-Messages are **flat in v0** — one stream per mission, no thread scoping. Every runner can read the whole stream via `runners msg read`.
+Messages are **flat in v0** — one stream per mission, no thread scoping. Each runner consumes messages through their **inbox** (§2.7.5): broadcasts plus directly-addressed messages.
 
 Messages and signals are separate for good reasons:
 - Signals are typed and small; orchestrator logic keys off them. Messages are prose; orchestrator doesn't parse them.
 - A signal without prose works ("approved"). Prose without a signal works too ("I noticed X"). Conflating them forces every signal to carry prose and every note to carry a type.
 - Runners (LLM agents) already know how to use both: signals are like exit codes, messages are like comments. The CLI keeps them linguistically separate.
+- Direct messages enable real conversation between runners without forcing every interaction through the orchestrator policy.
 
-#### 2.7.3 Thread *(v0.x)* — *scoped conversation*
+#### 2.7.3 Inbox — *"what's in my mailbox"*
+
+Every runner has an **inbox**: the subset of the mission's messages that are relevant to it. The inbox is a **projection** over the event log, not a separate data structure. For runner `X`:
+
+```
+inbox(X) = all message events in the mission where to = null OR to = X
+```
+
+`runners msg read` returns the calling runner's inbox, sorted by ULID (chronological).
+
+This design keeps the storage model simple (one event log per mission, same as before) while giving each runner a clean "what's for me" view. Broadcasts end up in everyone's inbox; direct messages end up in exactly one.
+
+**Why LLM agents won't see direct messages unless they're told:** agents act on their prompt. They don't spontaneously poll the filesystem. A message landing in the inbox doesn't itself make the agent aware of it. We solve this with an orchestrator action: when a directed message arrives, the orchestrator nudges the recipient's stdin with a one-line hint ("new message from `coder` — run `msg read`"). The agent then reads its inbox as a normal tool call. See §5.5 action `nudge_recipient`.
+
+The inbox is not a queue in the delete-on-read sense — messages stay in the log forever (well, for the mission). The "read" in `msg read` is lookup, not consumption. `msg read --since <ts>` lets agents fetch just what's new.
+
+#### 2.7.4 Thread *(v0.x)* — *scoped conversation*
 
 When a mission has 3+ runners or runs for long enough to develop sub-topics, the flat message stream gets noisy. Threads add a scoping layer: messages can be posted to a named thread; runners can `msg read <thread>` to get just that conversation.
 
 Cut from v0 because the v0 demo is two runners on one loop — the whole mission *is* the thread.
 
-#### 2.7.4 Fact *(v0.x)* — *queryable state*
+#### 2.7.5 Fact *(v0.x)* — *queryable state*
 
 A KV whiteboard. Any runner can `ctx set key value` and `ctx get key`. Mission-scoped; each mission starts with an empty whiteboard. Backed by the event log as a `fact_recorded` event type, projected in-memory by the orchestrator for O(1) reads.
 
@@ -369,7 +391,8 @@ Why a file instead of an in-memory bus:
   "mission_id": "01HG...",
   "kind": "signal",                 // signal | message  (v0.x adds: fact, thread_opened, ...)
   "from": "coder",                  // runner name | "human" | "orchestrator"
-  "to": null,                       // null = broadcast, or target runner name
+  "to": null,                       // null = broadcast; runner name = directed (messages);
+                                    //   for signals, always null in v0 (policy decides routing)
   "type": "review_requested",       // for kind=signal; omitted for kind=message
   "payload": { "...": "..." },      // kind-specific
   "correlation_id": null,
@@ -438,6 +461,7 @@ On orchestrator boot: open the mission's file, fold events into in-memory state 
 | Action | Effect | Emits event? |
 |---|---|---|
 | `inject_stdin` | write template + `\r` to target runner's PTY writer | `stdin_injected` (signal) |
+| `nudge_recipient` | write a short "new message from X, run `msg read`" hint into the recipient's stdin | `recipient_nudged` (signal) |
 | `ask_human` | add card to HITL panel; wait for click | `human_question` then `human_response` (signals) |
 | `notify_human` | fire a toast | `human_notified` (signal) |
 | `pause_runner` | SIGSTOP to target PTY | `runner_paused` (signal) |
@@ -445,15 +469,29 @@ On orchestrator boot: open the mission's file, fold events into in-memory state 
 
 Emitted events have `causation_id` = the triggering event's `id`.
 
+**Default policy for direct messages.** Every crew starts with a built-in rule `{ when: { kind: "message", to: "*" }, do: { action: "nudge_recipient" } }` that fires on any directed message. This ensures recipients know mail has arrived without the sender having to also emit a signal. Users can disable this per crew if they want silent inboxes.
+
 **Crash correctness:** emit the event *before* performing the action. Worst case on crash+replay is a duplicate action, recoverable (stdin seen twice; HITL cards deduped by event id). Silent loss is not.
 
 ### 5.6 Who does delivery
 
-Runners never address other runners directly with signals; they emit, the orchestrator routes. Messages are broadcast to the mission stream — any runner can `msg read` to consume them. In both cases, no runner addresses another by name (yet — mentions are v1).
+Two different delivery models, by primitive kind:
 
-- **Decoupled runners** — the Coder doesn't know the Reviewer exists by id. Swap the Reviewer without touching the Coder's brief.
-- **Single policy location** — every "when X, do Y" lives on the crew row.
-- **Orchestrator is the only side-effecting component** outside runner processes. Easy to reason about.
+- **Signals are orchestrator-routed.** Runners never address other runners with a signal. A signal is emitted into the bus; the orchestrator policy decides what happens (including whether to inject stdin into some specific runner). This keeps all control-flow routing in one place and lets you swap runners without rewriting emitters.
+- **Messages support both broadcast and direct addressing.** A runner can `msg post` (everyone's inbox) or `msg post --to <runner>` (that runner's inbox only). No orchestrator in the delivery path; messages are data, not control. The orchestrator is involved only to nudge recipients so they know mail arrived (§5.5, `nudge_recipient`).
+
+The split:
+
+| | Sender addresses recipient? | Orchestrator involved? |
+|---|:---:|:---:|
+| Signal | No — policy decides | Always |
+| Broadcast message | No | Only to nudge |
+| Direct message | Yes (`--to`) | Only to nudge |
+
+- **Decoupled control flow** — the Coder doesn't need to know the Reviewer's name to *signal* a review. Swap the Reviewer without rewriting the Coder's signal emissions.
+- **Coupled content flow where it's natural** — if Coder wants to ask Reviewer a specific question, it can just `msg post --to reviewer ...`. The roster injection (§4.3) already tells each runner the current names of its crewmates, so direct addressing works without extra config.
+- **Single policy location** for control — every "when signal X, do Y" lives on the crew row.
+- **Orchestrator is the only side-effecting component** outside runner processes. Direct messaging doesn't violate this — a direct `msg post` writes an event; the actual stdin hint is still an orchestrator action.
 
 ### 5.7 Known failure modes
 
@@ -485,12 +523,18 @@ This is how the Reviewer knows there's a Coder.
 
 ```
 runners signal <type> [--payload <json>] [--correlation-id <id>] [--causation-id <id>]
-runners msg    post <text> [--correlation-id <id>] [--causation-id <id>]
-runners msg    read [--since <ts>]
+runners msg    post <text> [--to <runner>] [--correlation-id <id>] [--causation-id <id>]
+runners msg    read [--since <ts>] [--from <runner>]
 runners help
 ```
 
 One binary. Two verbs. Context always from env.
+
+- `msg post` with no `--to` → broadcast.
+- `msg post --to <runner>` → directed; lands in that runner's inbox only.
+- `msg read` → the calling runner's inbox (broadcasts + directs addressed to me), sorted by ULID.
+- `msg read --from <runner>` → filter to messages authored by a specific sender.
+- `msg read --since <ts>` → only messages newer than `ts` (for polling without re-reading history).
 
 ## 7. Data model
 

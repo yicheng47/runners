@@ -27,8 +27,9 @@ v0 proves the loop works end-to-end with two runners on a single mission. v1+ sc
 - **Mission** — one activation of the crew. Everyone spawns together, shares a coordination bus, ends together.
 - **Session** — the live PTY process for a single runner within a single mission.
 - **Signal** — a typed notification runners emit for the orchestrator to route on. Verb grammar (`review_requested`, `approved`, `blocked`).
-- **Message** — prose posted to the mission's flat stream. Runner-to-runner conversation.
-- **Orchestrator** — the rule-based router that reads signals and decides what happens next.
+- **Message** — prose posted to the mission. Can be broadcast (to the mission) or directed (to a specific runner via `--to`).
+- **Inbox** — each runner's projection of the mission: broadcast messages plus messages addressed directly to it. Read via `runners msg read`.
+- **Orchestrator** — the rule-based router that reads signals and decides what happens next, including nudging runners when directed messages land in their inbox.
 
 ## 4. v0 scope
 
@@ -68,8 +69,9 @@ The concrete loop v0 must support end-to-end:
 6. Reviewer:
    - `runners msg read` (sees Coder's message)
    - reads the diff
-   - `runners msg post "Line 47 auth.rs needs a null check."`
-   - `runners msg post "session.rs timeout is 30s; our convention is 10s."`
+   - `runners msg post --to coder "Line 47 auth.rs needs a null check."`
+   - `runners msg post --to coder "session.rs timeout is 30s; our convention is 10s."`
+       *(orchestrator nudges Coder's stdin: "New message from reviewer — run `msg read`.")*
    - `runners signal changes_requested`
 7. Orchestrator policy for `changes_requested` says `ask_human`. The HITL panel pops a card: *"Reviewer requested changes. Accept and forward to Coder, or override?"*
 8. User clicks **Accept**. Orchestrator injects into Coder's stdin: "Reviewer requested changes — check `runners msg read`."
@@ -123,11 +125,16 @@ If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
 - Payload is optional JSON for the orchestrator's decision logic.
 - Emitted signals appear as events in the coordination bus (see §6.7) and drive the orchestrator.
 
-### 6.6 Messages — flat prose stream per mission
-- Runners post via `runners msg post "<text>"`.
-- Read via `runners msg read [--since <ts>]` — returns all messages in the mission in ULID order.
+### 6.6 Messages — prose with broadcast or direct addressing
+- Broadcast: `runners msg post "<text>"` — visible to everyone in the mission.
+- Direct: `runners msg post --to <runner> "<text>"` — lands only in that runner's inbox.
+- Read the inbox: `runners msg read [--since <ts>] [--from <runner>]` — returns the calling runner's inbox (broadcasts + directs addressed to me), sorted by ULID.
 - No thread scoping in v0 — one flat stream per mission.
 - Messages are human-readable and runner-readable. They are the "what I think" layer; signals are the "please act" layer.
+
+**Inbox as a concept.** Every runner has an inbox — a projection over the mission's message events where `to = null OR to = my_name`. This is not a separate store; it's a filtered view of the event log. "Inbox" names the view so users and agents share a clear mental model: *I have an inbox; I can read mine; I can address others.*
+
+**How recipients know mail has arrived.** LLM agents don't spontaneously poll. When a directed message arrives, the orchestrator (by default) injects a one-line hint into the recipient's stdin: *"New message from `coder` — run `msg read`."* The agent then reads its inbox as a normal tool call. This nudge is implemented as a built-in orchestrator rule and can be disabled per crew.
 
 ### 6.7 Coordination bus
 - Single append-only NDJSON file per mission at `$APPDATA/runners/crews/{crew_id}/missions/{mission_id}/events.ndjson`.
@@ -139,8 +146,8 @@ If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
 
 ```
 runners signal <type> [--payload <json>] [--correlation-id <id>] [--causation-id <id>]
-runners msg    post <text> [--correlation-id <id>] [--causation-id <id>]
-runners msg    read [--since <ts>]
+runners msg    post <text> [--to <runner>] [--correlation-id <id>] [--causation-id <id>]
+runners msg    read [--since <ts>] [--from <runner>]
 runners help
 ```
 
@@ -167,10 +174,11 @@ See `v0-arch.md` §5.3 for the full three-layer emission mechanism (system promp
   ```
 - Supported actions in v0:
   - `inject_stdin` — write a message into the target runner's stdin.
+  - `nudge_recipient` — write a short "new message from X, run `msg read`" hint into the recipient's stdin. Fires by default on any directed message.
   - `ask_human` — show a card in the HITL panel, wait for response.
   - `notify_human` — fire a toast.
   - `pause_runner` / `resume_runner` — SIGSTOP/SIGCONT the target PTY.
-- Rules fire only on signals in v0. Messages don't drive routing (v0.x: mentions will).
+- Rules fire on signals and on directed messages. Broadcast messages don't drive routing in v0 (v0.x: mentions will).
 
 ### 6.10 Human-in-the-loop panel
 - Right-rail panel showing all pending `ask_human` cards for the current mission.
