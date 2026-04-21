@@ -8,13 +8,12 @@
 
 From a clean launch of the app, a user can:
 
-1. Create two runner templates (one `claude-code`, one `shell`) on the **Runners** page.
-2. Create a **Crew** of two slots (lead + worker) on the **Crews** / **Crew Detail** pages; the lead invariant is enforced end-to-end.
-3. Click **Start Mission**, fill the goal, and see the Mission workspace open with two live PTY sessions.
-4. Watch the lead runner receive the goal via stdin, draft a plan, and post a directed message to the worker; see the worker's reply in the feed.
-5. Receive an `ask_human` card from any runner, click **Approve**, and see the response injected back into that runner's stdin.
-6. Post a broadcast `@human` message and have it land on the lead by default.
-7. Close and reopen the mission; the feed replays and the orchestrator's in-memory state reconstructs.
+1. Create a **Crew** on the Crews page, then add two runners to it (one `claude-code` lead, one `shell` worker) on the **Crew Detail** page. Runners are crew-scoped — there is no shared "template" concept in v0 (per PRD §3). The lead invariant is enforced end-to-end.
+2. Click **Start Mission**, fill the goal, and see the Mission workspace open with two live PTY sessions.
+3. Watch the lead runner receive the goal via stdin, draft a plan, and post a directed message to the worker; see the worker pick it up on its next `runners msg read`.
+4. See a worker emit an `ask_lead` signal; watch the lead decide to escalate via `ask_human`; click **Approve** on the resulting card; see the lead receive the response and forward it to the worker.
+5. Post a broadcast human signal from the workspace input and have it land on the lead by default.
+6. Close and reopen the mission; the feed replays and the orchestrator's in-memory state reconstructs.
 
 Anything beyond this is explicitly v0.x or later.
 
@@ -68,16 +67,22 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 **Deliverables.**
 - `src-tauri/src/db.rs` — connection pool with WAL mode, `rusqlite` migrations runner, bootstrapped at app start.
 - Migration `0001_init.sql` creating:
-  - `crews(id, name, purpose, created_at, updated_at)`
-  - `runners(id, crew_id, handle, display_name, role, binary, args, cwd, system_prompt, lead, position, created_at, updated_at)` with:
-    - `UNIQUE(crew_id, handle)`
-    - `UNIQUE(crew_id) WHERE lead = 1` — the lead invariant from arch §2.3.
-    - `FOREIGN KEY(crew_id) REFERENCES crews(id) ON DELETE CASCADE`
-  - `missions(id, crew_id, title, goal, cwd, status, started_at, stopped_at)`
-- Rust types in `src-tauri/src/model.rs`: `Crew`, `Runner`, `Mission`, `Event`, `EventKind`, serde-derived.
+  - `crews(id, name, purpose, goal, orchestrator_policy, signal_types, created_at, updated_at)`. `purpose` is short prose; `goal` is the default mission goal; `orchestrator_policy` is a JSON blob (nullable / empty for MVP — C8 only uses built-ins but the column is reserved); `signal_types` is a JSON array of allowed signal type strings.
+  - `runners(id, crew_id, handle, display_name, role, runtime, command, args, cwd, env, system_prompt, lead, position, created_at, updated_at)` with:
+    - `runtime` = one of `claude-code`, `codex`, `aider`, `shell` (enum stored as TEXT).
+    - `command` + `args` are the spawn form; `env` is a JSON map merged onto the session env at spawn time.
+    - `UNIQUE(crew_id, handle)`.
+    - `FOREIGN KEY(crew_id) REFERENCES crews(id) ON DELETE CASCADE`.
+  - `missions(id, crew_id, title, goal, cwd, status, started_at, stopped_at)`.
+  - `sessions(id, mission_id, runner_id, handle, pid, status, started_at, stopped_at)` — persisted so the reopen path (see C7/C8 replay) can identify which runners were active. PTYs themselves are not restored across app restarts.
+- Separate partial index for the lead invariant (SQLite requires a standalone statement for partial uniqueness, not inline in `CREATE TABLE`):
+  ```sql
+  CREATE UNIQUE INDEX one_lead_per_crew ON runners(crew_id) WHERE lead = 1;
+  ```
+- Rust types in `src-tauri/src/model.rs`: `Crew`, `Runner`, `Mission`, `Session`, `Event`, `EventKind`, `SignalType`, serde-derived.
 - TS types in `src/lib/types.ts` hand-synced with Rust (we're not pulling in `ts-rs` yet — too much ceremony for the MVP).
 
-**Tests.** Constraint tests for the unique partial index: inserting two leads in one crew fails; inserting leads across crews succeeds.
+**Tests.** Constraint tests for the partial unique index: inserting two leads in one crew fails; inserting leads across crews succeeds. Round-trip tests for the JSON-blob columns (`orchestrator_policy`, `signal_types`, `env`).
 
 **Out of scope.** No Tauri commands yet — that's C2.
 
@@ -102,21 +107,22 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 ---
 
-## C3 — Config UI (Runners, Crews, Crew Detail, Add Slot)
+## C3 — Config UI (Crews, Crew Detail, Runner Detail, Add Slot)
 
 **Goal.** Wire the config CRUD to the wireframes in `design/runners-design.pen`. This is the first chunk a non-engineer can interact with.
 
+**Scope note — no top-level Runners page in MVP.** Runners are crew-scoped per PRD §3. The design file's standalone "Runners" list and "Runner Detail" frames are kept for a future v0.x surface (a cross-crew runner browser) but are *not* built in MVP. Runner CRUD happens inside Crew Detail via Add Slot and an inline edit drawer.
+
 **Deliverables.**
-- `src/pages/Runners.tsx` — list, create, edit runner templates (maps to the "Runners" frame).
-- `src/pages/RunnerDetail.tsx` — edit a runner's handle / binary / system prompt.
-- `src/pages/Crews.tsx` — crew cards.
-- `src/pages/CrewEditor.tsx` — Crew Detail with ordered slot list, `LEAD` badge, `Set as lead` action, drag-reorder.
-- `src/components/AddSlotModal.tsx` — modal form.
+- `src/pages/Crews.tsx` — crew cards (create, list, delete).
+- `src/pages/CrewEditor.tsx` — Crew Detail: ordered runner list within the crew, `LEAD` badge, `Set as lead` action, drag-reorder, delete-runner.
+- `src/components/AddSlotModal.tsx` — modal form: handle, runtime, command/args, cwd, system prompt. First runner in a crew is auto-lead (per C2).
+- `src/components/RunnerEditDrawer.tsx` — slide-over to edit an existing runner's fields in place. Reuses the Runner Detail frame's layout but inside Crew Detail context.
 - All pages call Tauri commands via a tiny `src/lib/api.ts` wrapper.
 
-**Manual test plan.** Create two runner templates, create a crew, add two slots, reassign lead, delete lead, confirm auto-promotion.
+**Manual test plan.** Create a crew, add two runners, reassign lead, delete lead, confirm auto-promotion to the next runner by `position`.
 
-**Out of scope.** Mission workspace, Start Mission modal. Slots' system-prompt override field renders but is a write-only stub until v0.x.
+**Out of scope.** Mission workspace, Start Mission modal. Standalone Runners list/detail pages (design exists, MVP does not build them).
 
 ---
 
@@ -198,12 +204,14 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 **Deliverables.**
 - `src-tauri/src/orchestrator/mod.rs`:
   - Policy loader (reads the crew's policy JSON).
-  - Built-in rules always loaded:
-    - `mission_goal → inject_stdin @lead` with a composed prompt including the goal, the crew roster, and coordination instructions (see arch §4 for the template).
-    - `broadcast message from human → inject_stdin @lead` (lead-routing invariant).
-    - `directed message → inject_stdin @<to>` (any runner, any sender). This is how lead-mediated HITL works: a worker's "I need to ask the human…" message to `@lead` lands on lead's stdin immediately, and lead's forwarded answer lands on the worker's stdin the same way.
-    - `ask_human signal → emit human_question event + open card in UI`. If `payload.on_behalf_of` is present (the lead-mediated case), carry it into the `human_question` payload so the UI can render the attribution chain.
-    - `human_response event → inject_stdin to the runner that emitted the matching ask_human` — which is the lead in the lead-mediated flow, or the worker in the fallback direct flow. Orchestrator looks up the original asker by `question_id`.
+  - Built-in rules — **all signal-driven** (per arch §5.5.0, messages never trigger orchestrator actions):
+    - `signal mission_goal → inject_stdin @lead` with a composed prompt including the goal, the crew roster, and coordination instructions (see arch §4 for the template).
+    - `signal human_broadcast (from: human, to: null) → inject_stdin @lead` with the text payload. The workspace input emits this signal when the user posts without a `--to`.
+    - `signal human_direct (from: human, to: <handle>) → inject_stdin @<handle>` with the text payload. Workspace input emits this when the user picks a `to:`.
+    - `signal ask_lead → inject_stdin @lead` with the payload rendered into the injection template. This is the worker-asks-lead half of the lead-mediated HITL flow.
+    - `signal ask_human → emit human_question event + open card in UI`. If `payload.on_behalf_of` is present (the lead-mediated case), carry it into the `human_question` payload so the UI can render the attribution chain.
+    - `signal human_response → inject_stdin to the runner that emitted the matching ask_human` — the lead in the lead-mediated flow, the worker in the fallback direct flow. Orchestrator looks up the original asker by `question_id`.
+  - Lead-forwards-answer back to worker and any runner-to-runner exchange are **directed messages**, not orchestrator actions — recipients see them on their next `runners msg read`. No `directed message → inject` rule in MVP.
   - Dispatch ledger (in-memory map of `triggering_event_id → handled`) so replay is idempotent.
   - Pending-ask map keyed by `question_id`.
 
@@ -241,7 +249,10 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 - `src/pages/MissionWorkspace.tsx` — subscribes to `event/appended`, renders the feed.
 - `src/components/EventFeed.tsx` — message / signal / `ask_human` card variants.
 - `src/components/AskHumanCard.tsx` — buttons emit a `human_response` signal. If the underlying `human_question` carries `on_behalf_of`, render the attribution chain (e.g. *@impl → @architect → you*).
-- `src/components/MissionInput.tsx` — the Slack-channel input. Default `to: @<lead>`. `message` / `signal` mode toggle. Submitting calls a Tauri `human_post_message` command that writes to the log.
+- `src/components/MissionInput.tsx` — the Slack-channel input. Default `to: @<lead>`. Submitting always emits a signal (not a message) so the orchestrator can wake the recipient, per arch §5.5.0:
+  - no `to:` → `signal human_broadcast { text }`.
+  - `to: @<handle>` → `signal human_direct { text, to: <handle> }`.
+  The UI label can still say "message" for user-facing clarity; the underlying event kind is `signal`.
 - `src/components/RunnersRail.tsx` — list of sessions with status dot, `LEAD` badge, "open pty" action.
 - `src/components/RunnerTerminal.tsx` — xterm.js bound to the session output stream (popped out of the rail).
 
