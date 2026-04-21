@@ -60,27 +60,42 @@ The user defines a **crew** (configuration: runners + policy). They click **Star
 
 ## 2. Concepts
 
-Domain objects fall into three layers: **configuration** (persistent, edited by the user), **runtime containers** (live, created at mission start), and **coordination primitives** (what flows between runners during a mission).
+Domain objects split cleanly into two layers:
+
+- **Configuration** — persistent, user-edited. Outlives missions. Crew, Runner, Orchestrator Policy.
+- **Runtime** — created at mission start, torn down at mission end. Everything here is scoped to a mission: the Mission itself, its Sessions, its coordination primitives (Signals, Messages), and the orchestrator's in-memory state.
+
+The key insight: **Runner is config; Session is its runtime instance** — the same pattern as Crew (config) → Mission (runtime). A runner never runs on its own. A runner runs *inside a mission* as a session. The session is born when the mission starts, lives while the mission runs, and dies when the mission ends.
 
 ### 2.1 Relationship diagram
 
 ```
-Configuration (persistent)     Runtime (live or historical)
-
-  Crew ─┬── Runner ───────────► Session ────► PTY process
-        │                          ▲
-        └── Orchestrator Policy    │ spawned by
-              │                    │
-              └─ attached to ─► Mission ────► events.ndjson
-                                  │             │
-                                  │             ├─► Signal      [v0]
-                                  │             ├─► Message     [v0]
-                                  │             ├─► Thread      [v0.x]
-                                  │             └─► Fact        [v0.x]
-                                  │
-                                  └─► Shared context: brief + roster (v0)
-                                                      + facts (v0.x)
+┌─ Configuration (persistent) ─────────┐    ┌─ Runtime (mission-scoped) ──────────────┐
+│                                      │    │                                         │
+│   Crew ─┬── Runner ──────────────────┼────┼──► Session ─► PTY process               │
+│         │      (describes a role,    │    │     (one instance per runner per         │
+│         │       binary, brief)       │    │      mission; lives & dies with the      │
+│         │                            │    │      mission)                            │
+│         │                            │    │                                         │
+│         └── Orchestrator Policy      │    │     ▲                                    │
+│               │                      │    │     │  spawned & owned by                │
+│               └── attached to ───────┼────┼──► Mission ─── events.ndjson             │
+│                                      │    │     │              │                    │
+│                                      │    │     │              ├─► Signal   [v0]    │
+│                                      │    │     │              ├─► Message  [v0]    │
+│                                      │    │     │              ├─► Thread   [v0.x]  │
+│                                      │    │     │              └─► Fact     [v0.x]  │
+│                                      │    │     │                                   │
+│                                      │    │     ├─► Orchestrator in-memory state    │
+│                                      │    │     │    (pending asks, correlations)   │
+│                                      │    │     │                                   │
+│                                      │    │     └─► Shared context:                 │
+│                                      │    │           brief + roster (v0)           │
+│                                      │    │           + facts (v0.x)                │
+└──────────────────────────────────────┘    └─────────────────────────────────────────┘
 ```
+
+A mission is a container. Everything in the runtime column is either the container itself (Mission) or an object whose lifecycle is scoped by it. **Sessions are first-class members of this container** alongside the coordination bus and the orchestrator state — not a side effect of spawning runners.
 
 ### 2.2 Crew — *a configured team*
 
@@ -100,19 +115,37 @@ A JSON list of `{when, do}` rules attached to the crew. This is where all routin
 
 There is no code here — just a lookup table. No scripting, no LLM. v0 is deliberately dumb.
 
-### 2.5 Mission — *one activation of the crew*
+### 2.5 Mission — *one activation of the crew, and the runtime container*
 
-A runtime container. When the user clicks **Start Mission**, a mission row is created, sessions are spawned for every runner, the orchestrator is booted with a fresh in-memory state, and an NDJSON event log is opened. When the mission ends (explicit stop, or all sessions exited), everything in the container shuts down together.
+A mission is the only runtime container in the system. Everything alive at runtime lives *inside* a mission and dies with it:
 
-A mission scopes: the event log, the signal stream, the message stream, pending HITL cards, orchestrator memory.
+- A **Session** per runner (the PTY processes — see §2.6).
+- The **coordination bus** — the NDJSON event log carrying signals and messages.
+- The **orchestrator's in-memory state** — pending HITL asks, correlation tracking, (later) fact projection.
+- The **shared context** injected into each runner's composed prompt — the mission brief and the roster.
+
+Lifecycle:
+- **Start**: user clicks Start Mission on a crew. A mission row is created, one session is spawned per runner in the crew, the orchestrator boots with fresh state, and an NDJSON file is opened.
+- **End**: explicit stop, or all sessions exited. Every session is killed, the orchestrator stops, the mission row is closed out.
+
+This framing matters: when we say "the coordination bus is mission-scoped" or "the fact whiteboard is mission-scoped," we're saying the same thing as "sessions are mission-scoped." They all share one lifecycle because they all belong to the same container.
 
 v0 constraint: a crew can have at most one live mission at a time. A crew can have many historical missions.
 
-### 2.6 Session — *one runner's PTY process*
+### 2.6 Session — *one runner's PTY process, running inside a mission*
 
-The live process for one runner inside one mission. One runner × one mission = one session. Owns: a PTY master handle, a reader thread, a writer, a scrollback ring buffer. When the session's child process exits, the session is done; a new one is only created by starting a new mission.
+The runtime instance of a Runner. A Session is to a Runner what a Mission is to a Crew: the *run* of a *configuration*.
 
-A session is the only object that actually *executes* something — everything else is metadata or a coordination channel.
+A session exists if and only if a mission exists. One runner × one mission = one session. When the mission starts, each runner in the crew gets a session spawned for it. When the mission ends, every session in that mission is killed. A session cannot outlive its mission; a session cannot exist without one.
+
+A session owns:
+- A PTY master handle (the only object in the system with a file descriptor to a running child process).
+- A blocking reader thread that drains the PTY and pushes to the scrollback ring.
+- A writer for stdin injection (used by the human and by the orchestrator's `inject_stdin` action).
+- A ring buffer (~10k lines) for scrollback that survives frontend tab-switches and app restarts within the mission.
+- An exit status once the child has terminated.
+
+A session is the only object in the system that actually *executes* code — everything else is metadata, a coordination channel, or a projection over the event log.
 
 ### 2.7 Coordination primitives — *what flows between runners*
 
