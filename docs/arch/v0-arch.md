@@ -304,22 +304,40 @@ Goal: Implement feature X with tests and a clean PR.
 - Read the mission's message stream with `runners msg read`.
 ```
 
-### 4.4 Frontend wiring
+### 4.4 Frontend wiring and human takeover
 
 - On first view: fetch the session's scrollback ring; write to xterm.js to restore history.
 - Subscribe to `session:{id}:out` for live output.
 - xterm.js `onData` → `send_input(session_id, bytes)` → `master.writer.write_all(bytes)`.
 - Frontend window resize → debounced (~100ms) `master.resize(rows, cols)` → SIGWINCH to child. Non-optional; without it, TUIs mis-render.
 
-### 4.5 Threads, not async
+**Human takeover is a first-class capability.** At any moment, the human can type directly into any runner's stdin — the same writer the orchestrator uses for `inject_stdin`. This is deliberate: the human can step in to answer a prompt the agent is stuck on, correct a bad plan, kill a runaway tool call, or just chat with the agent mid-flight.
+
+The UI surface for this is the xterm pane itself — it's a real terminal, not a log viewer. Typing sends keystrokes through untouched, including special keys (arrows, Enter, Ctrl-C). The agent on the other end can't tell whether the bytes came from the orchestrator, the human, or a replay — which is the whole point.
+
+### 4.5 Sessions outlive the UI
+
+Sessions live in the Rust backend and belong to the mission, not to any webview or tab. Closing the mission control window does *not* kill the sessions — the agents keep running, events keep flowing into the NDJSON file, the orchestrator keeps applying rules. Re-opening the window re-attaches: the frontend fetches each session's scrollback ring to rebuild xterm state, then subscribes to live output from wherever it was.
+
+The only things that end a session in v0 are: user clicks End Mission, the child process exits, or the app itself quits. A closed webview window is none of those.
+
+**Why this matters for human takeover:** if the only way to type into a runner required the UI to be visible, then minimizing or closing the mission view to focus on something else would silently cut the human out of the loop. That's wrong — the human should be able to close the monitor and still inject stdin (or let the orchestrator do it) without anything changing about how agents run.
+
+### 4.6 Writer serialization
+
+The PTY master writer is shared between the human (via `send_input` command) and the orchestrator (via `inject_stdin` action). Concurrent writers could interleave bytes mid-line, which would confuse the TUI on the other end.
+
+Solution: wrap each session's writer in a `tokio::sync::Mutex`. Every write is one `write_all` call under the lock. Small writes (keystrokes, short prompts) are fast enough that contention is invisible.
+
+### 4.7 Threads, not async
 
 `portable-pty`'s reader is blocking. Spawn an OS thread per session. Writers stay on the Tauri async runtime (writes are short).
 
-### 4.6 Scrollback in Rust
+### 4.8 Scrollback in Rust
 
 `VecDeque<String>` ring (~10k lines) per session in SessionManager, so scrollback survives tab-switches and app restarts. Overflow lines append to `missions/{mission_id}/sessions/{session_id}.log`. The ring sees raw bytes including alt-screen toggles — acceptable v0 scuff.
 
-### 4.7 Death and kill
+### 4.9 Death and kill
 
 Reader thread owns the child handle. On EOF, it calls `wait()`, emits `session:{id}:exit`, updates the sessions row. No auto-restart in v0.
 

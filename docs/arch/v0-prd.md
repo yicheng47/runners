@@ -108,14 +108,14 @@ If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
 - A mission has: `id`, `crew_id`, `status` (running/completed/aborted), `goal_override` (optional per-mission brief overlay), `started_at`, `stopped_at`.
 - Crew page shows mission history: list of past missions with start time, duration, outcome summary.
 
-### 6.4 Live per-runner terminal
+### 6.4 Live per-runner terminal (with human takeover)
 - One PTY subprocess per runner per mission, spawned via `portable-pty`.
 - Stdout streams to the frontend via a Tauri event (`session:{id}:out`).
 - Frontend renders with **xterm.js** to preserve ANSI colors, cursor control, and TUI layouts.
 - Scrollback retained per session (cap at ~10k lines; overflow dumped to a per-session log file).
 - Status chip per runner: `idle | running | waiting_for_input | blocked_on_human | crashed`.
-- Stdin input box so the human can type directly into any runner.
-- Terminals stay alive across tab/selection switches.
+- **Human takeover, first-class.** The xterm pane is a real terminal, not a log viewer. At any moment the human can type directly into a runner's stdin — to answer a prompt, correct a bad plan, kill a runaway tool, or just chat with the agent mid-flight. Keystrokes including arrows, Enter, and Ctrl-C pass through untouched. Same writer path as the orchestrator's `inject_stdin`, so human and orchestrator are symmetric.
+- **Sessions outlive the UI.** Closing the mission control window does not kill sessions — agents keep running, events keep flowing, the orchestrator keeps routing. Re-opening re-attaches by fetching each session's scrollback ring. A session ends only on End Mission, child exit, or app quit. This means the human can close the monitor and still rely on the orchestrator + rules without cutting anyone out of the loop.
 
 ### 6.5 Signals — typed orchestrator-routable notifications
 - Runners emit via `runners signal <type> [--payload <json>]`.
