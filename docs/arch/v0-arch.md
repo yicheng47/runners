@@ -87,7 +87,7 @@ The key insight: **Runner is config; Session is its runtime instance** — the s
 │                                      │    │     │              └─► Fact     [v0.x]  │
 │                                      │    │     │                                   │
 │                                      │    │     ├─► Orchestrator in-memory state    │
-│                                      │    │     │    (pending asks, correlations)   │
+│                                      │    │     │    (pending asks, dispatch ledger)│
 │                                      │    │     │                                   │
 │                                      │    │     └─► Shared context:                 │
 │                                      │    │           brief + roster (v0)           │
@@ -128,7 +128,7 @@ A mission is the only runtime container in the system. Everything alive at runti
 
 - A **Session** per runner (the PTY processes — see §2.6).
 - The **coordination bus** — the NDJSON event log carrying signals and messages.
-- The **orchestrator's in-memory state** — pending HITL asks, correlation tracking, (later) fact projection.
+- The **orchestrator's in-memory state** — pending HITL asks, dispatch ledger (which triggering events have been handled), per-runner read watermarks, (later) fact projection.
 - The **shared context** injected into each runner's composed prompt — the mission brief and the roster.
 
 Lifecycle:
@@ -234,7 +234,7 @@ Facts differ from messages and signals: they're **current state**, not events. R
 
 ### 2.8 Events — *the unifying transport*
 
-Every coordination primitive is persisted as an **event** — one line in the per-mission NDJSON file. An event has: `{id, ts, crew_id, mission_id, kind, from, to, type, payload, correlation_id, causation_id}`.
+Every coordination primitive is persisted as an **event** — one line in the per-mission NDJSON file. An event has: `{id, ts, crew_id, mission_id, kind, from, to, type, payload}`.
 
 The `kind` field is the primitive discriminator — `signal`, `message`, and (later) `fact`, `thread_opened`. For `kind: "signal"`, the `type` field carries the signal's semantic verb (`review_requested`, `changes_requested`, etc.); for `kind: "message"`, `type` is omitted and the prose lives in `payload.text`. The orchestrator and UI project events into primitive-specific views based on `kind`.
 
@@ -436,18 +436,22 @@ Writers: only the bundled `runners` CLI writes to the log (the Rust backend also
   "to": null,                       // null = broadcast; runner handle = directed (messages);
                                     //   for signals, always null in v0 (policy decides routing)
   "type": "review_requested",       // for kind=signal; omitted for kind=message
-  "payload": { "...": "..." },      // kind-specific (e.g. { "text": "..." } for messages)
-  "correlation_id": null,
-  "causation_id": null
+  "payload": { "...": "..." }       // kind-specific (e.g. { "text": "..." } for messages)
 }
 ```
 
 For a signal event: `kind=signal`, `type` is set, payload optional.
 For a message event: `kind=message`, `payload.text` is the prose.
 
-- **ULID `id`** — sortable, embeds a ms timestamp.
-- **`correlation_id`** — groups events in one conversation (set by first emitter, propagated by orchestrator).
-- **`causation_id`** — which event caused this one. Together with correlation, forms the event DAG.
+- **ULID `id`** — sortable, embeds a ms timestamp. Ordering *is* the graph in v0.
+
+**On `correlation_id` / `causation_id` (deferred).** An earlier draft carried both fields on every event. They're dropped from v0:
+
+- The only real use case in v0 is matching an `ask_human` card to the `human_response` the operator clicks — that's handled in-payload via `human_response.payload.question_id` (§5.5.0).
+- No runner-authored event has a reliable prior cause to cite; exposing `--correlation-id` / `--causation-id` as CLI flags just invites agents to leave them null or hallucinate values.
+- "Groups events in one conversation" has no referent until threads (v0.x) define what a conversation is. Ship the concept with the thing that needs it.
+
+v0.x will reintroduce explicit event-DAG fields when threads and richer routing require them. Until then, the orchestrator's in-memory dispatch table carries causality for the actions that need it.
 
 ### 5.3 How runners emit signals and messages
 
@@ -497,19 +501,19 @@ Two subscribers to the NDJSON file, both via `notify`:
 
 #### Startup replay
 
-On orchestrator boot: open the mission's file, fold events into in-memory state (pending asks, correlation tracking), then switch to tailing. The file *is* the state.
+On orchestrator boot: open the mission's file, fold events into in-memory state (pending asks, dispatch ledger, read watermarks), then switch to tailing. The file *is* the state.
 
 ### 5.5 Orchestrator actions
 
-Every action emits at least one signal event with `causation_id` = the triggering event's `id`.
+Every action emits at least one audit signal. Each audit payload carries `triggered_by: <triggering-event.id>` so causality is visible without relying on envelope fields.
 
 | Action | Effect | Emits signal(s) with `type` |
 |---|---|---|
-| `inject_stdin` | write template + `\r` to target runner's PTY writer | `stdin_injected`, payload `{ target, watermark }` |
-| `ask_human` | add card to HITL panel; wait for click | `human_question` on card open; `human_response` on click |
-| `notify_human` | fire a toast | `human_notified` |
-| `pause_runner` | SIGSTOP to target PTY | `runner_paused` |
-| `resume_runner` | SIGCONT to target PTY | `runner_resumed` |
+| `inject_stdin` | write template + `\r` to target runner's PTY writer | `stdin_injected`, payload `{ triggered_by, target, watermark }` |
+| `ask_human` | add card to HITL panel; wait for click | `human_question` on card open; `human_response` on click (shapes in §5.5.0) |
+| `notify_human` | fire a toast | `human_notified`, payload `{ triggered_by, message }` |
+| `pause_runner` | SIGSTOP to target PTY | `runner_paused`, payload `{ triggered_by, target }` |
+| `resume_runner` | SIGCONT to target PTY | `runner_resumed`, payload `{ triggered_by, target }` |
 
 #### 5.5.0 `ask_human` — payload shapes and matching
 
@@ -522,11 +526,11 @@ Every action emits at least one signal event with `causation_id` = the triggerin
   "type": "human_question",
   "from": "orchestrator",
   "payload": {
+    "question_id": "01HG...",                  // = this event's id; echoed here for convenience
+    "triggered_by": <triggering-signal.id>,    // e.g. the changes_requested signal's id
     "prompt": "Reviewer requested changes. Accept or override?",
     "choices": ["accept", "override"]
-  },
-  "correlation_id": <triggering-signal.id>,   // e.g. the changes_requested signal
-  "causation_id":   <triggering-signal.id>
+  }
 }
 
 // When the human clicks a choice:
@@ -537,18 +541,15 @@ Every action emits at least one signal event with `causation_id` = the triggerin
   "payload": {
     "question_id": <human_question.id>,       // lets rules target a specific card
     "choice": "accept"                         // the clicked value (always one of choices[])
-  },
-  "correlation_id": <triggering-signal.id>,   // same as the question
-  "causation_id":   <human_question.id>
+  }
 }
 ```
 
-**Matching semantics for follow-up rules.** Downstream rules can match on `human_response` in two ways:
+Causality is carried in-payload rather than on the envelope: `human_question.payload.triggered_by` records which signal opened the card, and `human_response.payload.question_id` records which card the human clicked. The orchestrator needs no additional schema fields to match them.
 
-1. **By choice value** — `{ when: { signal: "human_response", payload: { choice: "accept" } }, do: ... }`. Matches any accept, regardless of which question triggered it.
-2. **By correlation** — rules can reference `$correlation` in `when` clauses (implemented as a lookup into the triggering event's fields). Useful when two `ask_human` prompts are outstanding at once and we need to discriminate: `{ when: { signal: "human_response", correlated_with: { type: "changes_requested" } } }`.
+**Matching semantics for follow-up rules.** Downstream rules match `human_response` by choice value — `{ when: { signal: "human_response", payload: { choice: "accept" } }, do: ... }`. Matches any accept, regardless of which question triggered it.
 
-For v0 we ship option (1); option (2) is flagged for v0.x if we hit cases where two outstanding questions collide.
+If two `ask_human` prompts are ever outstanding at once and we need to discriminate between them, v0.x will add richer matching (via the v0.x event-DAG fields). v0 ships the simple case; concurrent prompts are out of scope.
 
 **Messages do not trigger orchestrator actions in v0.** The inbox is pull-based (§2.7.3). If a sender needs the recipient to drop everything, they emit a signal — signals are the urgent wake-up mechanism; direct messages are async conversation.
 
@@ -633,13 +634,13 @@ This is how the Reviewer knows there's a Coder.
 ### 6.3 The `runners` CLI surface in v0
 
 ```
-runners signal <type> [--payload <json>] [--correlation-id <id>] [--causation-id <id>]
-runners msg    post <text> [--to <runner>] [--correlation-id <id>] [--causation-id <id>]
+runners signal <type> [--payload <json>]
+runners msg    post <text> [--to <runner>]
 runners msg    read [--since <ts>] [--from <runner>]
 runners help
 ```
 
-One binary. Two verbs. Context always from env.
+One binary. Two verbs. Context always from env. No event-DAG flags in v0 — causality is implicit (ordering in the log) or in-payload where it needs to be explicit (`human_response.payload.question_id`).
 
 - `msg post` with no `--to` → broadcast.
 - `msg post --to <runner>` → directed; lands in that runner's inbox only.
