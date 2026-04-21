@@ -192,33 +192,37 @@ See `v0-arch.md` §5.3 for the full three-layer emission mechanism (system promp
 
 ### 6.11 Mission control UI
 
-Single screen per live mission. Layout:
+One screen per live mission. Surfaces and their responsibilities:
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Feature Ship  •  Mission 2026-04-21 12:34    ▶ ⏸ ⏹    [End Mission]   │
-├──────────┬──────────────────────────────────┬────────────────────────┤
-│ Runners  │  ▌ Coder (running)               │ Pending asks           │
-│          │  ┌───────────────────────────┐   │ ┌────────────────────┐ │
-│ ● Coder  │  │ [xterm live output]       │   │ │ Reviewer requested │ │
-│ ○ Reviewer│ │                           │   │ │ changes.           │ │
-│          │  └───────────────────────────┘   │ │ [Accept] [Override]│ │
-│ + Spawn  │  > _                             │ └────────────────────┘ │
-│          │                                  │                        │
-│          │                                  │ Messages               │
-│          │  Signals (this mission)          │ coder  12:34           │
-│          │  12:34 review_requested          │  Branch feat/x ready…  │
-│          │  12:40 changes_requested         │ reviewer  12:38        │
-│          │  ...                             │  Line 47 auth.rs…      │
-└──────────┴──────────────────────────────────┴────────────────────────┘
-```
+- **Runner list** — every runner in the crew with a status indicator (`idle | running | waiting_for_input | blocked_on_human | crashed`). Selecting one focuses the main terminal area on it. Includes a control to spawn additional runners.
+- **Focused terminal** — the xterm.js view for the selected runner. Live PTY output with full TUI fidelity, stdin input for human takeover, and scrollback. Terminals stay alive across focus switches (§6.4).
+- **Signals pane** — chronological list of all signals emitted in this mission: timestamp, emitter, type. Scoped to the mission.
+- **HITL panel** — pending `ask_human` cards. Each card shows the triggering signal, the orchestrator's prompt, and choice buttons. Always visible so the operator never misses a pending decision.
+- **Messages pane** — every message in the mission (see §6.11.1 for visibility semantics and view modes).
+- **Mission header** — crew name, mission start time, global controls (Start/Pause/Stop, End Mission).
 
-- **Left rail**: runner list with status dots. Click to focus.
-- **Main area**: focused runner's live terminal + this mission's signal log below.
-- **Right rail**: HITL panel at the top, mission-wide messages stream below.
-- **[OPEN]** side-by-side view of two runners' terminals. Deferrable to v0.x.
+Side-by-side view of two runners' terminals is **[OPEN]** for v0 — deferrable to v0.x if it adds scope pressure.
 
-The **crew page** (not the mission page) lists past missions with status, start/stop times, and a one-line outcome summary pulled from the last few signals.
+#### 6.11.1 Message visibility — the human sees everything
+
+The operator is omniscient — the messages pane shows **every message in the mission**, regardless of addressing. Inbox scoping (broadcast + directed to me) applies to runners, not to the human. The human needs the full picture for oversight and debugging.
+
+Each message is labeled with direction: sender and recipient (or "all" for broadcast). Typical rows:
+
+- `coder → all` — a broadcast from the Coder.
+- `reviewer → coder` — a directed message from the Reviewer to the Coder.
+- `human → coder` — a message the operator sent via the UI (v0.x).
+
+The pane has two view modes, toggled at the pane header:
+
+- **All** (default) — flat chronological list of every message event in the mission.
+- **Inbox** — scoped to the currently-focused runner — shows only what that runner would get from `runners msg read` (broadcasts + directs addressed to it). Useful for debugging "did agent X actually see this message?"
+
+Clicking a message highlights any signal it correlates with (via `correlation_id` / `causation_id`) in the signals pane, so the operator can follow cause-and-effect threads across the mission.
+
+#### 6.11.2 Crew page
+
+The **crew page** (separate from the mission control screen) lists past missions with status, start/stop times, and a one-line outcome summary pulled from the last few signals.
 
 ## 7. Data model
 
