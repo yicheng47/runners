@@ -1,6 +1,11 @@
 # Runners — v0 PRD
 
 > Status: draft, open for feedback. Anything in **[OPEN]** is a decision we haven't taken yet.
+>
+> **Canonicity.** `docs/arch/v0-arch.md` is the source of truth for all protocol, schema, and event-model decisions. Where this PRD conflicts with the arch doc, the arch doc wins. Sections marked **⚠️ SUPERSEDED** below have been overtaken by arch updates and are kept only for historical context until the PRD is rewritten:
+> - §5 (Golden path) — the `changes_requested → ask_human → inject Coder` flow has been replaced by lead-mediated HITL (arch §2.2, §5.5.0).
+> - §6.8 (`runners` CLI) — the `--correlation-id` / `--causation-id` flags are dropped (arch §5.2).
+> - §6.11.1 — "clicking a message highlights correlated signals" relies on the dropped correlation fields.
 
 ## 1. Problem
 

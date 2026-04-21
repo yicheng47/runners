@@ -66,20 +66,21 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 **Deliverables.**
 - `src-tauri/src/db.rs` — connection pool with WAL mode, `rusqlite` migrations runner, bootstrapped at app start.
-- Migration `0001_init.sql` creating:
+- Migration `0001_init.sql` creating (field names match arch §5.2 / §6 data model exactly):
   - `crews(id, name, purpose, goal, orchestrator_policy, signal_types, created_at, updated_at)`. `purpose` is short prose; `goal` is the default mission goal; `orchestrator_policy` is a JSON blob (nullable / empty for MVP — C8 only uses built-ins but the column is reserved); `signal_types` is a JSON array of allowed signal type strings.
-  - `runners(id, crew_id, handle, display_name, role, runtime, command, args, cwd, env, system_prompt, lead, position, created_at, updated_at)` with:
+  - `runners(id, crew_id, handle, display_name, role, runtime, command, args_json, working_dir, env_json, system_prompt, lead, position, created_at, updated_at)` with:
     - `runtime` = one of `claude-code`, `codex`, `aider`, `shell` (enum stored as TEXT).
-    - `command` + `args` are the spawn form; `env` is a JSON map merged onto the session env at spawn time.
+    - `command` + `args_json` are the spawn form; `env_json` is a JSON map merged onto the session env at spawn time; `working_dir` is the runner's PTY cwd override (null = use mission cwd).
     - `UNIQUE(crew_id, handle)`.
     - `FOREIGN KEY(crew_id) REFERENCES crews(id) ON DELETE CASCADE`.
-  - `missions(id, crew_id, title, goal, cwd, status, started_at, stopped_at)`.
+  - `missions(id, crew_id, title, goal_override, cwd, status, started_at, stopped_at)`. `goal_override` is nullable; when null, the mission inherits `crews.goal`.
   - `sessions(id, mission_id, runner_id, handle, pid, status, started_at, stopped_at)` — persisted so the reopen path (see C7/C8 replay) can identify which runners were active. PTYs themselves are not restored across app restarts.
 - Separate partial index for the lead invariant (SQLite requires a standalone statement for partial uniqueness, not inline in `CREATE TABLE`):
   ```sql
   CREATE UNIQUE INDEX one_lead_per_crew ON runners(crew_id) WHERE lead = 1;
   ```
-- Rust types in `src-tauri/src/model.rs`: `Crew`, `Runner`, `Mission`, `Session`, `Event`, `EventKind`, `SignalType`, serde-derived.
+- **Default signal-type allowlist.** Every new crew row is seeded with `signal_types = ["mission_goal", "human_said", "ask_lead", "ask_human", "human_question", "human_response", "inbox_read"]` — the full set of built-in types the MVP needs. Users can extend this list in v0.x; in MVP it is write-only from the DB layer. Without this seeding the CLI will reject the built-in signals at spawn time per arch §5.3 Layer 2.
+- Rust types in `src-tauri/src/model.rs`: `Crew`, `Runner`, `Mission`, `Session`, `Event`, `EventKind`, `SignalType`, serde-derived. Serde field attributes map Rust snake_case fields like `args`, `working_dir`, `env` to the DB/JSON column names `args_json`, `working_dir`, `env_json` consistently.
 - TS types in `src/lib/types.ts` hand-synced with Rust (we're not pulling in `ts-rs` yet — too much ceremony for the MVP).
 
 **Tests.** Constraint tests for the partial unique index: inserting two leads in one crew fails; inserting leads across crews succeeds. Round-trip tests for the JSON-blob columns (`orchestrator_policy`, `signal_types`, `env`).
@@ -150,7 +151,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 **Deliverables.**
 - `src-tauri/src/commands/mission.rs`:
-  - `mission_start(crew_id, title, goal, cwd)` — validates the crew has ≥1 runner and exactly one lead, creates the mission row, creates the mission dir, appends `mission_start` and `mission_goal` events to the log.
+  - `mission_start(crew_id, title, goal_override, cwd)` — validates the crew has ≥1 runner and exactly one lead, creates the mission row, creates the mission dir, exports the crew's `signal_types` column to `$APPDATA/runners/crews/{crew_id}/signal_types.json` (per arch §5.3 Layer 2 — the CLI reads this sidecar to validate emitted signal types), then appends `mission_start` and `mission_goal` events to the log.
   - `mission_stop(mission_id)` — marks the mission stopped, appends `mission_stopped`.
   - `mission_list`, `mission_get`.
 - Returns enough context to the frontend that C10 can navigate to the workspace.
@@ -204,12 +205,11 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 **Deliverables.**
 - `src-tauri/src/orchestrator/mod.rs`:
   - Policy loader (reads the crew's policy JSON).
-  - Built-in rules — **all signal-driven** (per arch §5.5.0, messages never trigger orchestrator actions):
+  - Built-in rules — **all signal-driven** (per arch §5.5.0, messages never trigger orchestrator actions). Per arch §5.2, signals always carry `to: null` in v0; any target lives in `payload.target`.
     - `signal mission_goal → inject_stdin @lead` with a composed prompt including the goal, the crew roster, and coordination instructions (see arch §4 for the template).
-    - `signal human_broadcast (from: human, to: null) → inject_stdin @lead` with the text payload. The workspace input emits this signal when the user posts without a `--to`.
-    - `signal human_direct (from: human, to: <handle>) → inject_stdin @<handle>` with the text payload. Workspace input emits this when the user picks a `to:`.
-    - `signal ask_lead → inject_stdin @lead` with the payload rendered into the injection template. This is the worker-asks-lead half of the lead-mediated HITL flow.
-    - `signal ask_human → emit human_question event + open card in UI`. If `payload.on_behalf_of` is present (the lead-mediated case), carry it into the `human_question` payload so the UI can render the attribution chain.
+    - `signal human_said (from: "human", payload: { text, target? }) → inject_stdin @payload.target if set, else @lead`. One signal type covers both broadcast and directed human input; routing is payload-driven, not envelope-driven. The workspace input emits this signal on Post.
+    - `signal ask_lead (from: <worker>, payload: { question, context }) → inject_stdin @lead` with the payload rendered into the injection template. The worker-asks-lead half of the lead-mediated HITL flow.
+    - `signal ask_human (from: <runner>, payload: { prompt, choices, on_behalf_of? }) → emit human_question event + open card in UI`. If `payload.on_behalf_of` is present (the lead-mediated case), carry it into the `human_question` payload so the UI can render the attribution chain.
     - `signal human_response → inject_stdin to the runner that emitted the matching ask_human` — the lead in the lead-mediated flow, the worker in the fallback direct flow. Orchestrator looks up the original asker by `question_id`.
   - Lead-forwards-answer back to worker and any runner-to-runner exchange are **directed messages**, not orchestrator actions — recipients see them on their next `runners msg read`. No `directed message → inject` rule in MVP.
   - Dispatch ledger (in-memory map of `triggering_event_id → handled`) so replay is idempotent.
@@ -249,10 +249,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 - `src/pages/MissionWorkspace.tsx` — subscribes to `event/appended`, renders the feed.
 - `src/components/EventFeed.tsx` — message / signal / `ask_human` card variants.
 - `src/components/AskHumanCard.tsx` — buttons emit a `human_response` signal. If the underlying `human_question` carries `on_behalf_of`, render the attribution chain (e.g. *@impl → @architect → you*).
-- `src/components/MissionInput.tsx` — the Slack-channel input. Default `to: @<lead>`. Submitting always emits a signal (not a message) so the orchestrator can wake the recipient, per arch §5.5.0:
-  - no `to:` → `signal human_broadcast { text }`.
-  - `to: @<handle>` → `signal human_direct { text, to: <handle> }`.
-  The UI label can still say "message" for user-facing clarity; the underlying event kind is `signal`.
+- `src/components/MissionInput.tsx` — the Slack-channel input. Default recipient in the UI is `@<lead>`. Submitting always emits a `signal human_said` (not a message event) so the orchestrator can wake the recipient, per arch §5.5.0. Signal envelope keeps `to: null` per arch §5.2; the picked recipient lives in `payload.target` (omitted for broadcast, set to the handle for directed). The UI label can still say "message" for user-facing clarity; the underlying event kind is `signal`.
 - `src/components/RunnersRail.tsx` — list of sessions with status dot, `LEAD` badge, "open pty" action.
 - `src/components/RunnerTerminal.tsx` — xterm.js bound to the session output stream (popped out of the rail).
 
