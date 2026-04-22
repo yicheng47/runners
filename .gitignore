@@ -26,3 +26,4 @@ dist-ssr
 .claude/settings.local.json
 src-tauri/target
 /target
+.claude/scheduled_tasks.lock
