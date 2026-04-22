@@ -12,7 +12,7 @@
 // and `mission_goal` (the human's intent, which the orchestrator routes to
 // the lead via the built-in rule in C8).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use chrono::Utc;
 use runners_core::event_log::{self, EventLog};
@@ -121,11 +121,11 @@ pub fn get(conn: &Connection, id: &str) -> Result<Mission> {
 }
 
 pub fn start(
-    conn: &Connection,
+    conn: &mut Connection,
     app_data_dir: &Path,
     input: StartMissionInput,
 ) -> Result<StartMissionOutput> {
-    let title = input.title.trim();
+    let title = input.title.trim().to_string();
     if title.is_empty() {
         return Err(Error::msg("mission title must not be empty"));
     }
@@ -148,9 +148,32 @@ pub fn start(
         )));
     }
 
+    // Everything below is done under a DB transaction so that if any of the
+    // filesystem or event-log writes fail, the mission row is rolled back
+    // and the operator doesn't see a phantom `running` mission (review
+    // finding #1). The sole piece of state that can linger on failure is
+    // an empty mission directory — harmless because the ULID is never
+    // reused, and the next `mission_start` gets a fresh ID + dir.
+    let tx = conn.transaction()?;
+
+    // Arch §2.5: a crew can have at most one live mission at a time
+    // (review finding #2). Enforce here inside the tx to avoid a
+    // race between the check and the insert.
+    let running_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM missions WHERE crew_id = ?1 AND status = 'running'",
+        params![crew.id],
+        |row| row.get(0),
+    )?;
+    if running_count > 0 {
+        return Err(Error::msg(format!(
+            "crew {} already has a live mission; stop it before starting another",
+            crew.name
+        )));
+    }
+
     let id = new_id();
     let started_at = now();
-    conn.execute(
+    tx.execute(
         "INSERT INTO missions
             (id, crew_id, title, status, goal_override, cwd, started_at)
          VALUES (?1, ?2, ?3, 'running', ?4, ?5, ?6)",
@@ -202,14 +225,17 @@ pub fn start(
         payload: serde_json::json!({ "text": goal_text }),
     })?;
 
-    let mission = get(conn, &id)?;
+    // All log writes succeeded — commit the DB row so the mission becomes
+    // visible to list/get only after its startup events are durable.
+    let mission = get(&tx, &id)?;
+    tx.commit()?;
     Ok(StartMissionOutput {
         mission,
         goal: goal_text,
     })
 }
 
-pub fn stop(conn: &Connection, app_data_dir: &Path, id: &str) -> Result<Mission> {
+pub fn stop(conn: &mut Connection, app_data_dir: &Path, id: &str) -> Result<Mission> {
     let mission = get(conn, id)?;
     if !matches!(mission.status, MissionStatus::Running) {
         return Err(Error::msg(format!(
@@ -218,8 +244,13 @@ pub fn stop(conn: &Connection, app_data_dir: &Path, id: &str) -> Result<Mission>
         )));
     }
 
+    // Mirror `start`: flip status inside a tx and only commit once the
+    // terminal `mission_stopped` event has been appended. If the log write
+    // fails, the mission stays `running` and the operator can retry.
+    let tx = conn.transaction()?;
+
     let stopped_at = now();
-    conn.execute(
+    tx.execute(
         "UPDATE missions
             SET status = 'completed', stopped_at = ?1
           WHERE id = ?2",
@@ -238,36 +269,40 @@ pub fn stop(conn: &Connection, app_data_dir: &Path, id: &str) -> Result<Mission>
         payload: serde_json::json!({}),
     })?;
 
-    get(conn, id)
+    let updated = get(&tx, id)?;
+    tx.commit()?;
+    Ok(updated)
 }
 
 /// Write the crew's signal-type allowlist to
-/// `$APPDATA/runners/crews/{crew_id}/signal_types.json` atomically (tmp +
-/// rename) so a crash during write never leaves a half-written file that
-/// the CLI would read and reject valid types on.
+/// `$APPDATA/runners/crews/{crew_id}/signal_types.json` atomically so a
+/// crash during write never leaves a half-written file that the CLI would
+/// read and reject valid types on.
+///
+/// Uses `tempfile::NamedTempFile::persist` for the replace — plain
+/// `std::fs::rename` fails on Windows when the destination exists, which
+/// would break every mission start after the first for a given crew.
 fn write_signal_types_sidecar(
     app_data_dir: &Path,
     crew_id: &str,
     allowlist: &[SignalType],
 ) -> Result<()> {
+    use std::io::Write;
+
     let target = event_log::signal_types_path(app_data_dir, crew_id);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp: PathBuf = {
-        let mut t = target.clone();
-        let name = t
-            .file_name()
-            .map(|n| n.to_owned())
-            .unwrap_or_else(|| "signal_types.json".into());
-        let mut owned = name;
-        owned.push(".tmp");
-        t.set_file_name(owned);
-        t
-    };
-    let json = serde_json::to_string(allowlist)?;
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, &target)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| Error::msg("signal_types.json path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+
+    // tempfile places the temp file in the same directory so the rename is
+    // intra-filesystem (required for atomicity on Unix) and uses
+    // `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` under the hood on Windows.
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    let json = serde_json::to_vec(allowlist)?;
+    tmp.write_all(&json)?;
+    tmp.flush()?;
+    tmp.persist(&target).map_err(|e| Error::Io(e.error))?;
     Ok(())
 }
 
@@ -276,14 +311,14 @@ pub async fn mission_start(
     state: State<'_, AppState>,
     input: StartMissionInput,
 ) -> Result<StartMissionOutput> {
-    let conn = state.db.get()?;
-    start(&conn, &state.app_data_dir, input)
+    let mut conn = state.db.get()?;
+    start(&mut conn, &state.app_data_dir, input)
 }
 
 #[tauri::command]
 pub async fn mission_stop(state: State<'_, AppState>, id: String) -> Result<Mission> {
-    let conn = state.db.get()?;
-    stop(&conn, &state.app_data_dir, &id)
+    let mut conn = state.db.get()?;
+    stop(&mut conn, &state.app_data_dir, &id)
 }
 
 #[tauri::command]
@@ -347,12 +382,12 @@ mod tests {
     #[test]
     fn start_rejects_crew_with_no_runners() {
         let pool = pool();
-        let conn = pool.get().unwrap();
+        let mut conn = pool.get().unwrap();
         let crew_id = seed_crew(&conn, "Empty", None);
         let tmp = tempfile::tempdir().unwrap();
 
         let err = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id,
@@ -378,7 +413,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let err = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id,
@@ -400,7 +435,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let out = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id: crew_id.clone(),
@@ -460,7 +495,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let out = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id,
@@ -483,7 +518,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let out = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id: crew_id.clone(),
@@ -494,7 +529,7 @@ mod tests {
         )
         .unwrap();
 
-        let stopped = stop(&conn, tmp.path(), &out.mission.id).unwrap();
+        let stopped = stop(&mut conn, tmp.path(), &out.mission.id).unwrap();
         assert_eq!(stopped.status, MissionStatus::Completed);
         assert!(stopped.stopped_at.is_some());
 
@@ -523,7 +558,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let out = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id,
@@ -533,9 +568,9 @@ mod tests {
             },
         )
         .unwrap();
-        stop(&conn, tmp.path(), &out.mission.id).unwrap();
+        stop(&mut conn, tmp.path(), &out.mission.id).unwrap();
 
-        let err = stop(&conn, tmp.path(), &out.mission.id).unwrap_err();
+        let err = stop(&mut conn, tmp.path(), &out.mission.id).unwrap_err();
         assert!(format!("{err}").contains("not running"));
     }
 
@@ -550,7 +585,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         let m1 = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id: a.clone(),
@@ -561,10 +596,12 @@ mod tests {
         )
         .unwrap()
         .mission;
+        // One-live-mission-per-crew rule: stop the first before starting the second.
+        stop(&mut conn, tmp.path(), &m1.id).unwrap();
         // Force a distinct started_at.
         std::thread::sleep(std::time::Duration::from_millis(5));
         let m2 = start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id: a.clone(),
@@ -576,7 +613,7 @@ mod tests {
         .unwrap()
         .mission;
         start(
-            &conn,
+            &mut conn,
             tmp.path(),
             StartMissionInput {
                 crew_id: b,
@@ -594,5 +631,127 @@ mod tests {
 
         let all = list(&conn, None).unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn start_rejects_second_live_mission_on_same_crew() {
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let crew_id = seed_crew(&conn, "A", None);
+        add_runner(&mut conn, &crew_id, "lead");
+        let tmp = tempfile::tempdir().unwrap();
+
+        start(
+            &mut conn,
+            tmp.path(),
+            StartMissionInput {
+                crew_id: crew_id.clone(),
+                title: "first".into(),
+                goal_override: Some("go".into()),
+                cwd: None,
+            },
+        )
+        .unwrap();
+
+        let err = start(
+            &mut conn,
+            tmp.path(),
+            StartMissionInput {
+                crew_id,
+                title: "second".into(),
+                goal_override: Some("go".into()),
+                cwd: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("already has a live mission"),
+            "expected one-live-mission error, got {err}"
+        );
+    }
+
+    #[test]
+    fn sidecar_is_rewritten_on_second_start_for_same_crew() {
+        // Regression for the Windows rename-over-existing issue. On Unix the
+        // test passes trivially; on Windows it previously failed because
+        // `std::fs::rename` errors when the destination exists.
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let crew_id = seed_crew(&conn, "A", None);
+        add_runner(&mut conn, &crew_id, "lead");
+        let tmp = tempfile::tempdir().unwrap();
+
+        let out = start(
+            &mut conn,
+            tmp.path(),
+            StartMissionInput {
+                crew_id: crew_id.clone(),
+                title: "m1".into(),
+                goal_override: Some("go".into()),
+                cwd: None,
+            },
+        )
+        .unwrap();
+        stop(&mut conn, tmp.path(), &out.mission.id).unwrap();
+
+        // Sidecar now exists — starting the next mission must overwrite it.
+        start(
+            &mut conn,
+            tmp.path(),
+            StartMissionInput {
+                crew_id: crew_id.clone(),
+                title: "m2".into(),
+                goal_override: Some("go".into()),
+                cwd: None,
+            },
+        )
+        .unwrap();
+
+        let sidecar = event_log::signal_types_path(tmp.path(), &crew_id);
+        assert!(sidecar.exists());
+        let types: Vec<String> =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+        assert!(types.contains(&"mission_goal".to_string()));
+    }
+
+    #[test]
+    fn start_rolls_back_row_when_log_append_fails() {
+        // Force `EventLog::open` to fail by giving it an `app_data_dir` that
+        // can't be created (we preemptively occupy the path with a regular
+        // file so `create_dir_all` bails). The mission row must not survive
+        // the failure.
+        use std::fs;
+
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let crew_id = seed_crew(&conn, "A", None);
+        add_runner(&mut conn, &crew_id, "lead");
+
+        let tmp = tempfile::tempdir().unwrap();
+        // Block the `crews/` subtree by making it a file instead of a dir.
+        fs::write(tmp.path().join("crews"), b"blocked").unwrap();
+
+        let err = start(
+            &mut conn,
+            tmp.path(),
+            StartMissionInput {
+                crew_id: crew_id.clone(),
+                title: "m".into(),
+                goal_override: Some("go".into()),
+                cwd: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::Io(_)),
+            "expected IO failure from FS, got {err:?}"
+        );
+
+        // No phantom mission.
+        let missions = list(&conn, Some(&crew_id)).unwrap();
+        assert!(
+            missions.is_empty(),
+            "mission row must be rolled back; found {missions:?}"
+        );
     }
 }
