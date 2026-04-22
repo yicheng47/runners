@@ -1,4 +1,460 @@
-// TODO: edit a crew — manage its runners, orchestrator policy, sessions.
+// Crew detail — matches design/runners-design.pen frame `CUKjM`.
+//
+// Layout:
+//   - top toolbar (`tb_cd`): back to Crews + inline name field + Save +
+//     Start mission. Start mission is disabled in C3 — it belongs to C11.
+//   - content: Purpose section + Slots section with numbered draggable rows.
+//
+// Template palette is intentionally omitted: MVP has no runner-template
+// concept (PRD §3 — runners are crew-scoped), so the palette has nothing
+// to list. Add Slot goes straight to the modal instead.
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
+import { Link, useParams } from "react-router-dom";
+
+import { api } from "../lib/api";
+import type { Crew, Runner } from "../lib/types";
+import { AppShell } from "../components/AppShell";
+import { AddSlotModal } from "../components/AddSlotModal";
+import { RunnerEditDrawer } from "../components/RunnerEditDrawer";
+import { Button } from "../components/ui/Button";
+
 export default function CrewEditor() {
-  return <div className="p-8">Crew Editor</div>;
+  const { crewId } = useParams<{ crewId: string }>();
+  const [crew, setCrew] = useState<Crew | null>(null);
+  const [runners, setRunners] = useState<Runner[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Runner | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const [reordering, setReordering] = useState(false);
+  const reorderInFlight = useRef(false);
+
+  const refresh = useCallback(async () => {
+    if (!crewId) return;
+    try {
+      setError(null);
+      const [c, rs] = await Promise.all([
+        api.crew.get(crewId),
+        api.runner.list(crewId),
+      ]);
+      setCrew(c);
+      setRunners(rs);
+      setNameDraft(c.name);
+      setLoaded(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [crewId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onSaveName = async () => {
+    if (!crew || !crewId) return;
+    const next = nameDraft.trim();
+    if (!next || next === crew.name) return;
+    setSavingName(true);
+    try {
+      await api.crew.update(crewId, { name: next });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  const onSetLead = async (id: string) => {
+    try {
+      await api.runner.setLead(id);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onDeleteRunner = async (r: Runner) => {
+    const tail = r.lead
+      ? "\nAs the LEAD, leadership will pass to the next runner by position."
+      : "";
+    if (!confirm(`Remove runner @${r.handle}?${tail}`)) return;
+    try {
+      await api.runner.delete(r.id);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onCommitReorder = async (newOrder: Runner[]) => {
+    if (!crewId) return;
+    if (reorderInFlight.current) return;
+    reorderInFlight.current = true;
+    setReordering(true);
+    setRunners(newOrder);
+    try {
+      const updated = await api.runner.reorder(
+        crewId,
+        newOrder.map((r) => r.id),
+      );
+      setRunners(updated);
+    } catch (e) {
+      setError(String(e));
+      await refresh();
+    } finally {
+      reorderInFlight.current = false;
+      setReordering(false);
+    }
+  };
+
+  if (!crewId) {
+    return (
+      <AppShell>
+        <div className="p-8 text-sm text-red-700">Missing crew id.</div>
+      </AppShell>
+    );
+  }
+
+  const nameDirty = crew !== null && nameDraft.trim() !== crew.name && nameDraft.trim().length > 0;
+
+  return (
+    <AppShell>
+      {/* Top toolbar */}
+      <div className="flex items-center justify-between gap-4 border-b border-[#E5E5E5] bg-white px-8 py-4">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Link
+            to="/crews"
+            className="shrink-0 text-sm text-neutral-500 transition-colors hover:text-neutral-800"
+          >
+            ← Crews
+          </Link>
+          <span className="text-neutral-300">/</span>
+          {crew ? (
+            <input
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void onSaveName();
+                }
+                if (e.key === "Escape") {
+                  setNameDraft(crew.name);
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              className="min-w-0 max-w-sm rounded-md border border-[#E5E5E5] bg-[#FAFAFA] px-2.5 py-1.5 text-sm font-semibold text-neutral-900 focus:border-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-300"
+            />
+          ) : (
+            <span className="text-sm text-neutral-400">…</span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            onClick={onSaveName}
+            disabled={!nameDirty || savingName}
+            title={nameDirty ? "Save crew name" : "No changes"}
+          >
+            {savingName ? "Saving…" : "Save"}
+          </Button>
+          <Button
+            variant="primary"
+            disabled
+            title="Start Mission arrives in C11"
+          >
+            Start mission
+          </Button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="p-8 text-sm text-neutral-500">Loading…</div>
+        ) : !loaded ? (
+          <div className="m-8 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error ?? "Failed to load crew."}
+          </div>
+        ) : crew === null ? (
+          <div className="p-8 text-sm text-red-700">Crew not found.</div>
+        ) : (
+          <div className="mx-auto flex max-w-4xl flex-col gap-8 px-8 py-8">
+            {error ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {/* Purpose */}
+            <section className="flex flex-col gap-1.5">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                Purpose
+              </div>
+              {crew.purpose ? (
+                <p className="text-sm text-neutral-700">{crew.purpose}</p>
+              ) : (
+                <p className="text-sm italic text-neutral-400">
+                  No purpose set.
+                </p>
+              )}
+            </section>
+
+            {/* Slots */}
+            <section className="flex flex-col gap-4">
+              <div className="flex items-end justify-between gap-4">
+                <div className="flex flex-col gap-0.5">
+                  <h2 className="text-xl font-bold text-neutral-900">Slots</h2>
+                  <p className="text-xs text-neutral-500">
+                    Positions in the crew. Each slot binds a handle to a
+                    runner.
+                  </p>
+                  <p className="text-xs text-neutral-500">
+                    The{" "}
+                    <span className="font-semibold text-amber-800">LEAD</span>{" "}
+                    is the crew's face — receives human messages by default
+                    and dispatches to other slots.
+                  </p>
+                </div>
+                <Button variant="primary" onClick={() => setAdding(true)}>
+                  + Add slot
+                </Button>
+              </div>
+
+              <RunnerList
+                runners={runners}
+                reordering={reordering}
+                onSetLead={onSetLead}
+                onEdit={(r) => setEditing(r)}
+                onDelete={onDeleteRunner}
+                onReorder={onCommitReorder}
+              />
+            </section>
+          </div>
+        )}
+      </div>
+
+      <AddSlotModal
+        open={adding}
+        crewId={crewId}
+        isFirstRunner={runners.length === 0}
+        onClose={() => setAdding(false)}
+        onCreated={async () => {
+          setAdding(false);
+          await refresh();
+        }}
+      />
+
+      <RunnerEditDrawer
+        open={editing !== null}
+        runner={editing}
+        onClose={() => setEditing(null)}
+        onSaved={async () => {
+          setEditing(null);
+          await refresh();
+        }}
+      />
+    </AppShell>
+  );
+}
+
+function RunnerList({
+  runners,
+  reordering,
+  onSetLead,
+  onEdit,
+  onDelete,
+  onReorder,
+}: {
+  runners: Runner[];
+  reordering: boolean;
+  onSetLead: (id: string) => void;
+  onEdit: (r: Runner) => void;
+  onDelete: (r: Runner) => void;
+  onReorder: (newOrder: Runner[]) => void;
+}) {
+  if (runners.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-[#D0D0D0] bg-[#FAFAFA] px-5 py-8 text-center">
+        <p className="text-sm text-neutral-600">No slots yet.</p>
+        <p className="mt-1 text-[11px] text-neutral-500">
+          Use <span className="font-medium">+ Add slot</span> above — the first
+          runner auto-assigns as LEAD.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <ol className="flex flex-col gap-3">
+      {runners.map((r, i) => (
+        <RunnerRow
+          key={r.id}
+          runner={r}
+          index={i}
+          total={runners.length}
+          dragDisabled={reordering}
+          onSetLead={() => onSetLead(r.id)}
+          onEdit={() => onEdit(r)}
+          onDelete={() => onDelete(r)}
+          onReorderDrop={(fromIndex) => {
+            if (fromIndex === i) return;
+            const next = moveItem(runners, fromIndex, i);
+            onReorder(next);
+          }}
+        />
+      ))}
+    </ol>
+  );
+}
+
+function moveItem<T>(arr: T[], from: number, to: number): T[] {
+  const copy = arr.slice();
+  const [item] = copy.splice(from, 1);
+  copy.splice(to, 0, item);
+  return copy;
+}
+
+function RunnerRow({
+  runner,
+  index,
+  total,
+  dragDisabled,
+  onSetLead,
+  onEdit,
+  onDelete,
+  onReorderDrop,
+}: {
+  runner: Runner;
+  index: number;
+  total: number;
+  dragDisabled: boolean;
+  onSetLead: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onReorderDrop: (fromIndex: number) => void;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const draggable = total > 1 && !dragDisabled;
+
+  const onDragStart = (e: DragEvent<HTMLLIElement>) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(index));
+  };
+  const onDragOver = (e: DragEvent<HTMLLIElement>) => {
+    if (dragDisabled) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOver(true);
+  };
+  const onDragLeave = () => setDragOver(false);
+  const onDrop = (e: DragEvent<HTMLLIElement>) => {
+    if (dragDisabled) return;
+    e.preventDefault();
+    setDragOver(false);
+    const from = Number(e.dataTransfer.getData("text/plain"));
+    if (!Number.isNaN(from)) onReorderDrop(from);
+  };
+
+  const summary = useMemo(() => {
+    const parts = [runner.command, ...runner.args];
+    return parts.filter(Boolean).join(" ");
+  }, [runner.command, runner.args]);
+
+  return (
+    <li
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={`group flex items-center gap-4 rounded-lg border bg-white p-4 transition-colors ${
+        dragOver
+          ? "border-neutral-500 bg-neutral-50"
+          : "border-[#E5E5E5] hover:border-neutral-300"
+      }`}
+    >
+      <div
+        className={`flex shrink-0 select-none items-center text-[14px] leading-none text-neutral-300 ${
+          draggable ? "cursor-grab" : "opacity-40"
+        }`}
+        title={draggable ? "Drag to reorder" : undefined}
+      >
+        ⋮⋮
+      </div>
+      <div className="w-4 shrink-0 text-center text-xs font-semibold text-neutral-400">
+        {index + 1}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[13px] font-medium text-neutral-900">
+            @{runner.handle}
+          </span>
+          <span className="text-xs text-neutral-500">{runner.display_name}</span>
+          {runner.lead ? (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+              Lead
+            </span>
+          ) : null}
+          <span className="rounded bg-[#F2F2F2] px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
+            {runner.role}
+          </span>
+          <span className="rounded bg-[#F2F2F2] px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
+            {runner.runtime}
+          </span>
+        </div>
+        {summary ? (
+          <div className="mt-1 truncate font-mono text-[11px] text-neutral-500">
+            $ {summary}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3 text-xs opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+        {runner.lead ? (
+          <span
+            title="Already the crew's lead"
+            className="text-neutral-400"
+          >
+            Lead
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onSetLead}
+            className="text-neutral-500 transition-colors hover:text-neutral-900"
+          >
+            Set as lead
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onEdit}
+          className="text-[#0066CC] transition-colors hover:underline"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          className="text-[#B91C1C] transition-colors hover:underline"
+        >
+          Remove
+        </button>
+      </div>
+    </li>
+  );
 }
