@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+pub const EVENTS_FILENAME: &str = "events.ndjson";
+
 pub fn crew_dir(app_data: &Path, crew_id: &str) -> PathBuf {
     app_data.join("crews").join(crew_id)
 }
@@ -20,7 +22,7 @@ pub fn mission_dir(app_data: &Path, crew_id: &str, mission_id: &str) -> PathBuf 
 }
 
 pub fn events_path(app_data: &Path, crew_id: &str, mission_id: &str) -> PathBuf {
-    mission_dir(app_data, crew_id, mission_id).join(super::log::EVENTS_FILENAME)
+    mission_dir(app_data, crew_id, mission_id).join(EVENTS_FILENAME)
 }
 
 pub fn signal_types_path(app_data: &Path, crew_id: &str) -> PathBuf {

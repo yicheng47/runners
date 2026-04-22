@@ -26,6 +26,19 @@ impl Error {
     }
 }
 
+// Lift shared-core errors into the app error so command code can `?` across
+// the boundary. We flatten to existing variants rather than adding a `Core`
+// wrapper that'd need its own Display.
+impl From<runners_core::Error> for Error {
+    fn from(e: runners_core::Error) -> Self {
+        match e {
+            runners_core::Error::Io(err) => Error::Io(err),
+            runners_core::Error::Json(err) => Error::Json(err),
+            runners_core::Error::Msg(s) => Error::Msg(s),
+        }
+    }
+}
+
 impl serde::Serialize for Error {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         s.serialize_str(&self.to_string())

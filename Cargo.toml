@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/runners-core",
+]
+
+[workspace.package]
+edition = "2021"
+authors = ["Jason Wang <yuesihan@gmail.com>"]
+
+[workspace.dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+fs2 = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+ulid = "1"
