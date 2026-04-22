@@ -5,4 +5,5 @@
 // connection from the r2d2 pool and delegate. See docs/impls/v0-mvp.md §C2.
 
 pub mod crew;
+pub mod mission;
 pub mod runner;
