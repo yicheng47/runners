@@ -31,3 +31,4 @@ ulid = { workspace = true }
 # Regular dep (not dev-only) because the sidecar writer needs
 # NamedTempFile::persist for a Windows-safe atomic replace.
 tempfile = "3"
+portable-pty = "0.8"

@@ -320,14 +320,52 @@ fn write_signal_types_sidecar(
 #[tauri::command]
 pub async fn mission_start(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     input: StartMissionInput,
 ) -> Result<StartMissionOutput> {
-    let mut conn = state.db.get()?;
-    start(&mut conn, &state.app_data_dir, input)
+    use crate::session::manager::{SessionEvents, TauriSessionEvents};
+    use std::sync::Arc;
+
+    let out = {
+        let mut conn = state.db.get()?;
+        start(&mut conn, &state.app_data_dir, input)?
+    };
+
+    // Mission row + opening events are durable — spawn one PTY per runner.
+    // If a spawn fails, we propagate the error but leave the mission and any
+    // successfully-spawned sessions alone so the operator can inspect and
+    // recover. A stricter all-or-nothing policy belongs in a future chunk
+    // once session restart / abort semantics exist.
+    //
+    // Post-C5.5a the roster lives in `crew_runners`, so we join through it
+    // instead of listing global runners. Each `CrewRunner` carries the
+    // runner row we need to spawn plus the per-crew slot metadata we don't.
+    let roster = {
+        let conn = state.db.get()?;
+        crew_runner::list(&conn, &out.mission.crew_id)?
+    };
+    let events_log_path =
+        event_log::events_path(&state.app_data_dir, &out.mission.crew_id, &out.mission.id);
+    let emitter: Arc<dyn SessionEvents> = Arc::new(TauriSessionEvents(app.clone()));
+    for member in roster {
+        state.sessions.spawn(
+            &out.mission,
+            &member.runner,
+            events_log_path.clone(),
+            state.db.clone(),
+            Arc::clone(&emitter),
+        )?;
+    }
+    Ok(out)
 }
 
 #[tauri::command]
 pub async fn mission_stop(state: State<'_, AppState>, id: String) -> Result<Mission> {
+    // Kill live sessions first so their reader threads drain before we flip
+    // the mission row. A fully parallel shutdown is fine too, but this
+    // ordering keeps the event log ordering sane: all `session/exit`s land
+    // before `mission_stopped`.
+    let _ = state.sessions.kill_all_for_mission(&id);
     let mut conn = state.db.get()?;
     stop(&mut conn, &state.app_data_dir, &id)
 }
