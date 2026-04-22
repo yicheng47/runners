@@ -6,10 +6,16 @@ mod model;
 mod orchestrator;
 mod session;
 
+use std::path::PathBuf;
+
 use tauri::Manager;
 
 pub struct AppState {
     pub db: db::DbPool,
+    /// Root of the app's per-user data tree — `$APPDATA/runners/` on real
+    /// installs, a tempdir in tests. Mission commands resolve event-log paths
+    /// relative to this via `runners_core::event_log::path`.
+    pub app_data_dir: PathBuf,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,7 +31,10 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir)?;
             let db_path = app_data_dir.join("runners.db");
             let pool = db::open_pool(&db_path)?;
-            app.manage(AppState { db: pool });
+            app.manage(AppState {
+                db: pool,
+                app_data_dir,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,6 +50,10 @@ pub fn run() {
             commands::runner::runner_delete,
             commands::runner::runner_set_lead,
             commands::runner::runner_reorder,
+            commands::mission::mission_start,
+            commands::mission::mission_stop,
+            commands::mission::mission_list,
+            commands::mission::mission_get,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
