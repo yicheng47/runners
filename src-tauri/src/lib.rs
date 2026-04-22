@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod error;
 mod event_bus;
+mod event_log;
 mod model;
 mod orchestrator;
 mod session;

@@ -27,6 +27,7 @@ r2d2_sqlite = "0.25"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 ulid = "1"
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
