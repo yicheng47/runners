@@ -74,3 +74,53 @@ export interface Event {
   type?: SignalType;
   payload: unknown;
 }
+
+// --- C2 command inputs ---------------------------------------------------
+// Hand-synced with src-tauri/src/commands/{crew,runner}.rs input structs.
+// Fields typed `X | null` on a declared-optional key mirror Rust's
+// `Option<Option<T>>` pattern: omit to keep the existing value, pass null
+// to clear it.
+
+export interface CrewListItem extends Crew {
+  runner_count: number;
+}
+
+export interface CreateCrewInput {
+  name: string;
+  purpose?: string | null;
+  goal?: string | null;
+}
+
+export interface UpdateCrewInput {
+  name?: string;
+  purpose?: string | null;
+  goal?: string | null;
+  orchestrator_policy?: unknown | null;
+  signal_types?: SignalType[];
+}
+
+export interface CreateRunnerInput {
+  crew_id: string;
+  handle: string;
+  display_name: string;
+  role: string;
+  runtime: string;
+  command: string;
+  args?: string[];
+  working_dir?: string | null;
+  system_prompt?: string | null;
+  env?: Record<string, string>;
+}
+
+// `handle` is intentionally excluded: it's the runner's identity in events
+// and CLI addressing and must not be renamed after creation.
+export interface UpdateRunnerInput {
+  display_name?: string;
+  role?: string;
+  runtime?: string;
+  command?: string;
+  args?: string[];
+  working_dir?: string | null;
+  system_prompt?: string | null;
+  env?: Record<string, string>;
+}
