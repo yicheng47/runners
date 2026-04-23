@@ -48,6 +48,48 @@ fn runner_exists(conn: &Connection, runner_id: &str) -> Result<bool> {
     Ok(found.is_some())
 }
 
+/// Renumber a crew's surviving members so `position` is dense (0..N-1) in
+/// the current display order. Callers run this inside a transaction after
+/// any operation that can leave gaps (single remove, cascade from a global
+/// runner delete). Without it, removing the middle of `0,1,2` leaves `0,2`
+/// and the next `add_runner` (which does `MAX(position)+1`) produces
+/// `0,2,3` — breaking the dense invariant that `list()` exposes via the
+/// `CrewRunner.position` field.
+///
+/// Because `UNIQUE(crew_id, position)` would transiently fire while we
+/// shift rows down, we park each survivor at a negative slot first and
+/// then rewrite the final positions. Same two-pass idiom `reorder` uses.
+///
+/// Caller must hold the transaction — we take `&Connection` so this works
+/// with a `Transaction` (which derefs to it) without leaking the
+/// `Transaction<'_>` type into the signature.
+pub(super) fn repack_positions(conn: &Connection, crew_id: &str) -> Result<()> {
+    let ordered: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT runner_id FROM crew_runners
+              WHERE crew_id = ?1
+              ORDER BY position ASC",
+        )?;
+        let rows = stmt.query_map(params![crew_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (i, id) in ordered.iter().enumerate() {
+        conn.execute(
+            "UPDATE crew_runners SET position = ?1
+               WHERE crew_id = ?2 AND runner_id = ?3",
+            params![-(i as i64) - 1, crew_id, id],
+        )?;
+    }
+    for (position, id) in ordered.iter().enumerate() {
+        conn.execute(
+            "UPDATE crew_runners SET position = ?1
+               WHERE crew_id = ?2 AND runner_id = ?3",
+            params![position as i64, crew_id, id],
+        )?;
+    }
+    Ok(())
+}
+
 /// Return the runners that belong to a crew, ordered by position, each
 /// annotated with its `lead` flag and membership timestamp. Joins
 /// `crew_runners` against `runners` in one shot so the UI can render a
@@ -184,6 +226,9 @@ pub fn remove_runner(conn: &mut Connection, crew_id: &str, runner_id: &str) -> R
             )?;
         }
     }
+
+    // Close the gap the delete opened so position stays dense (0..N-1).
+    repack_positions(&tx, crew_id)?;
 
     tx.commit()?;
     Ok(())
@@ -542,6 +587,91 @@ mod tests {
         let roster = list(&conn, &c).unwrap();
         assert_eq!(roster[0].runner.id, r1);
         assert_eq!(roster[1].runner.id, r2);
+    }
+
+    #[test]
+    fn removing_middle_member_keeps_positions_dense() {
+        // Regression for the position-hole bug: removing the middle of
+        // 0,1,2 leaves 0,2 → next add lands at 3, not 2.
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let c = seed_crew(&conn, "A");
+        let r1 = seed_runner(&conn, "alpha");
+        let r2 = seed_runner(&conn, "beta");
+        let r3 = seed_runner(&conn, "gamma");
+        add_runner(&mut conn, &c, &r1).unwrap();
+        add_runner(&mut conn, &c, &r2).unwrap();
+        add_runner(&mut conn, &c, &r3).unwrap();
+
+        remove_runner(&mut conn, &c, &r2).unwrap();
+
+        let roster = list(&conn, &c).unwrap();
+        let positions: Vec<i64> = roster.iter().map(|m| m.position).collect();
+        assert_eq!(
+            positions,
+            vec![0, 1],
+            "positions must be dense after middle removal"
+        );
+
+        // Next add must land at 2, not 3.
+        let r4 = seed_runner(&conn, "delta");
+        let added = add_runner(&mut conn, &c, &r4).unwrap();
+        assert_eq!(added.position, 2, "new member appends at dense next slot");
+    }
+
+    #[test]
+    fn removing_lead_keeps_positions_dense_and_promotes() {
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let c = seed_crew(&conn, "A");
+        let r1 = seed_runner(&conn, "alpha"); // pos 0, auto-lead
+        let r2 = seed_runner(&conn, "beta"); // pos 1
+        let r3 = seed_runner(&conn, "gamma"); // pos 2
+        add_runner(&mut conn, &c, &r1).unwrap();
+        add_runner(&mut conn, &c, &r2).unwrap();
+        add_runner(&mut conn, &c, &r3).unwrap();
+
+        remove_runner(&mut conn, &c, &r1).unwrap();
+
+        let roster = list(&conn, &c).unwrap();
+        assert_eq!(roster[0].runner.id, r2);
+        assert_eq!(roster[0].position, 0);
+        assert!(roster[0].lead, "beta promoted to lead");
+        assert_eq!(roster[1].runner.id, r3);
+        assert_eq!(roster[1].position, 1);
+    }
+
+    #[test]
+    fn deleting_shared_runner_repacks_positions_in_each_crew() {
+        // Regression: a global runner delete cascades through crew_runners
+        // but used to leave holes in every affected crew.
+        let pool = pool();
+        let mut conn = pool.get().unwrap();
+        let c1 = seed_crew(&conn, "A");
+        let c2 = seed_crew(&conn, "B");
+        let shared = seed_runner(&conn, "shared");
+        let a2 = seed_runner(&conn, "a2");
+        let b1 = seed_runner(&conn, "b1");
+        let b2 = seed_runner(&conn, "b2");
+        // Crew A: a2 (lead, pos 0), shared (pos 1).
+        add_runner(&mut conn, &c1, &a2).unwrap();
+        add_runner(&mut conn, &c1, &shared).unwrap();
+        // Crew B: b1 (lead, pos 0), shared (pos 1), b2 (pos 2).
+        add_runner(&mut conn, &c2, &b1).unwrap();
+        add_runner(&mut conn, &c2, &shared).unwrap();
+        add_runner(&mut conn, &c2, &b2).unwrap();
+
+        runner::delete(&mut conn, &shared).unwrap();
+
+        let in_a = list(&conn, &c1).unwrap();
+        assert_eq!(in_a.len(), 1);
+        assert_eq!(in_a[0].position, 0);
+
+        let in_b = list(&conn, &c2).unwrap();
+        let positions: Vec<i64> = in_b.iter().map(|m| m.position).collect();
+        assert_eq!(positions, vec![0, 1], "crew B dense after cascade + repack");
+        assert_eq!(in_b[0].runner.id, b1);
+        assert_eq!(in_b[1].runner.id, b2);
     }
 
     #[test]

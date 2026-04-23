@@ -250,12 +250,14 @@ pub fn update(conn: &Connection, id: &str, input: UpdateRunnerInput) -> Result<R
 pub fn delete(conn: &mut Connection, id: &str) -> Result<()> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-    // Crews where this runner currently holds the lead. Collected BEFORE
-    // the delete so we know who needs auto-promotion.
-    let lead_crews: Vec<String> = {
-        let mut stmt =
-            tx.prepare("SELECT crew_id FROM crew_runners WHERE runner_id = ?1 AND lead = 1")?;
-        let rows = stmt.query_map(params![id], |r| r.get::<_, String>(0))?;
+    // Every crew the runner currently belongs to, collected BEFORE the
+    // cascade so we still know who needs auto-promotion + position repack.
+    // Lead flag captured inline so we don't need a second query.
+    let affected_crews: Vec<(String, bool)> = {
+        let mut stmt = tx.prepare("SELECT crew_id, lead FROM crew_runners WHERE runner_id = ?1")?;
+        let rows = stmt.query_map(params![id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
@@ -265,22 +267,28 @@ pub fn delete(conn: &mut Connection, id: &str) -> Result<()> {
     }
     // CASCADE fired: all crew_runners rows for this runner are gone.
 
-    for crew_id in lead_crews {
-        let promote: Option<String> = tx
-            .query_row(
-                "SELECT runner_id FROM crew_runners
-                  WHERE crew_id = ?1
-                  ORDER BY position ASC LIMIT 1",
-                params![crew_id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(new_lead) = promote {
-            tx.execute(
-                "UPDATE crew_runners SET lead = 1 WHERE crew_id = ?1 AND runner_id = ?2",
-                params![crew_id, new_lead],
-            )?;
+    for (crew_id, was_lead) in affected_crews {
+        if was_lead {
+            let promote: Option<String> = tx
+                .query_row(
+                    "SELECT runner_id FROM crew_runners
+                      WHERE crew_id = ?1
+                      ORDER BY position ASC LIMIT 1",
+                    params![crew_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(new_lead) = promote {
+                tx.execute(
+                    "UPDATE crew_runners SET lead = 1 WHERE crew_id = ?1 AND runner_id = ?2",
+                    params![crew_id, new_lead],
+                )?;
+            }
         }
+        // Close the position gap the cascade left for this crew, so
+        // survivors stay dense (0..N-1) and the next `add_runner` lands
+        // at a contiguous position instead of `MAX+1 = old_max + 1`.
+        super::crew_runner::repack_positions(&tx, &crew_id)?;
     }
 
     tx.commit()?;
