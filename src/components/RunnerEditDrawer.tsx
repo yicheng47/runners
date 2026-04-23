@@ -7,13 +7,16 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
-import type { Runner, UpdateRunnerInput } from "../lib/types";
+import type { CrewRunner, Runner, UpdateRunnerInput } from "../lib/types";
 import { Button } from "./ui/Button";
 import { Drawer } from "./ui/Overlay";
 import { Field, Input, Textarea } from "./ui/Field";
 
 const RUNTIMES = ["shell", "claude-code", "codex", "aider"] as const;
 
+// Accept either a global Runner (from the Runners page in C5.5b) or a
+// CrewRunner (slot inside a crew) — the extra `lead` / `position` fields
+// on CrewRunner are just rendered as a badge.
 export function RunnerEditDrawer({
   open,
   runner,
@@ -21,7 +24,7 @@ export function RunnerEditDrawer({
   onSaved,
 }: {
   open: boolean;
-  runner: Runner | null;
+  runner: Runner | CrewRunner | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -89,7 +92,7 @@ export function RunnerEditDrawer({
             <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-xs font-normal text-neutral-600">
               @{runner.handle}
             </span>
-            {runner.lead ? (
+            {"lead" in runner && runner.lead ? (
               <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
                 Lead
               </span>

@@ -83,7 +83,7 @@ pub fn list(conn: &Connection) -> Result<Vec<CrewListItem>> {
     let mut stmt = conn.prepare(
         "SELECT c.id, c.name, c.purpose, c.goal, c.orchestrator_policy,
                 c.signal_types, c.created_at, c.updated_at,
-                (SELECT COUNT(*) FROM runners r WHERE r.crew_id = c.id) AS runner_count
+                (SELECT COUNT(*) FROM crew_runners cr WHERE cr.crew_id = c.id) AS runner_count
            FROM crews c
          ORDER BY c.created_at ASC",
     )?;
@@ -261,9 +261,16 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO runners (
-                id, crew_id, handle, display_name, role, runtime, command,
-                lead, position, created_at, updated_at
-             ) VALUES ('r1', ?1, 'lead', 'Lead', 'impl', 'shell', 'sh', 1, 0, '2026-04-22T00:00:00Z', '2026-04-22T00:00:00Z')",
+                id, handle, display_name, role, runtime, command,
+                created_at, updated_at
+             ) VALUES ('r1', 'lead', 'Lead', 'impl', 'shell', 'sh',
+                       '2026-04-22T00:00:00Z', '2026-04-22T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO crew_runners (crew_id, runner_id, position, lead, added_at)
+             VALUES (?1, 'r1', 0, 1, '2026-04-22T00:00:00Z')",
             params![a.id],
         )
         .unwrap();
@@ -304,7 +311,10 @@ mod tests {
     }
 
     #[test]
-    fn delete_cascades_to_runners() {
+    fn delete_cascades_to_crew_runners_but_spares_runner_row() {
+        // Runners are global (C5.5). Deleting a crew should strip the
+        // join rows but leave the runner intact for other crews (or a
+        // future direct chat).
         let pool = ctx();
         let conn = pool.get().unwrap();
         let crew = create(
@@ -318,22 +328,35 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO runners (
-                id, crew_id, handle, display_name, role, runtime, command,
-                lead, position, created_at, updated_at
-             ) VALUES ('r1', ?1, 'lead', 'Lead', 'impl', 'shell', 'sh', 1, 0, '2026-04-22T00:00:00Z', '2026-04-22T00:00:00Z')",
+                id, handle, display_name, role, runtime, command,
+                created_at, updated_at
+             ) VALUES ('r1', 'lead', 'Lead', 'impl', 'shell', 'sh',
+                       '2026-04-22T00:00:00Z', '2026-04-22T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO crew_runners (crew_id, runner_id, position, lead, added_at)
+             VALUES (?1, 'r1', 0, 1, '2026-04-22T00:00:00Z')",
             params![crew.id],
         )
         .unwrap();
 
         delete(&conn, &crew.id).unwrap();
-        let remaining: i64 = conn
+        let slot_count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM runners WHERE crew_id = ?1",
+                "SELECT COUNT(*) FROM crew_runners WHERE crew_id = ?1",
                 params![crew.id],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(remaining, 0);
+        let runner_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM runners WHERE id = 'r1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(slot_count, 0);
+        assert_eq!(runner_count, 1, "runner outlives the crew");
     }
 
     #[test]

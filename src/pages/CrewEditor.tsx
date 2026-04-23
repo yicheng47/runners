@@ -20,7 +20,7 @@ import {
 import { Link, useParams } from "react-router-dom";
 
 import { api } from "../lib/api";
-import type { Crew, Runner } from "../lib/types";
+import type { Crew, CrewRunner } from "../lib/types";
 import { AppShell } from "../components/AppShell";
 import { AddSlotModal } from "../components/AddSlotModal";
 import { RunnerEditDrawer } from "../components/RunnerEditDrawer";
@@ -29,12 +29,12 @@ import { Button } from "../components/ui/Button";
 export default function CrewEditor() {
   const { crewId } = useParams<{ crewId: string }>();
   const [crew, setCrew] = useState<Crew | null>(null);
-  const [runners, setRunners] = useState<Runner[]>([]);
+  const [runners, setRunners] = useState<CrewRunner[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<Runner | null>(null);
+  const [editing, setEditing] = useState<CrewRunner | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [savingName, setSavingName] = useState(false);
   const [reordering, setReordering] = useState(false);
@@ -46,7 +46,7 @@ export default function CrewEditor() {
       setError(null);
       const [c, rs] = await Promise.all([
         api.crew.get(crewId),
-        api.runner.list(crewId),
+        api.crew.listRunners(crewId),
       ]);
       setCrew(c);
       setRunners(rs);
@@ -78,36 +78,41 @@ export default function CrewEditor() {
     }
   };
 
-  const onSetLead = async (id: string) => {
+  const onSetLead = async (runnerId: string) => {
+    if (!crewId) return;
     try {
-      await api.runner.setLead(id);
+      await api.crew.setLead(crewId, runnerId);
       await refresh();
     } catch (e) {
       setError(String(e));
     }
   };
 
-  const onDeleteRunner = async (r: Runner) => {
+  // "Remove from crew" vs. "Delete runner entirely" are two different ops
+  // in C5.5. A crew slot is just a membership row — taking it out of a
+  // crew doesn't delete the runner. The runners page owns global delete.
+  const onRemoveFromCrew = async (r: CrewRunner) => {
+    if (!crewId) return;
     const tail = r.lead
       ? "\nAs the LEAD, leadership will pass to the next runner by position."
       : "";
-    if (!confirm(`Remove runner @${r.handle}?${tail}`)) return;
+    if (!confirm(`Remove @${r.handle} from this crew?${tail}`)) return;
     try {
-      await api.runner.delete(r.id);
+      await api.crew.removeRunner(crewId, r.id);
       await refresh();
     } catch (e) {
       setError(String(e));
     }
   };
 
-  const onCommitReorder = async (newOrder: Runner[]) => {
+  const onCommitReorder = async (newOrder: CrewRunner[]) => {
     if (!crewId) return;
     if (reorderInFlight.current) return;
     reorderInFlight.current = true;
     setReordering(true);
     setRunners(newOrder);
     try {
-      const updated = await api.runner.reorder(
+      const updated = await api.crew.reorder(
         crewId,
         newOrder.map((r) => r.id),
       );
@@ -239,7 +244,7 @@ export default function CrewEditor() {
                 reordering={reordering}
                 onSetLead={onSetLead}
                 onEdit={(r) => setEditing(r)}
-                onDelete={onDeleteRunner}
+                onRemove={onRemoveFromCrew}
                 onReorder={onCommitReorder}
               />
             </section>
@@ -276,15 +281,15 @@ function RunnerList({
   reordering,
   onSetLead,
   onEdit,
-  onDelete,
+  onRemove,
   onReorder,
 }: {
-  runners: Runner[];
+  runners: CrewRunner[];
   reordering: boolean;
   onSetLead: (id: string) => void;
-  onEdit: (r: Runner) => void;
-  onDelete: (r: Runner) => void;
-  onReorder: (newOrder: Runner[]) => void;
+  onEdit: (r: CrewRunner) => void;
+  onRemove: (r: CrewRunner) => void;
+  onReorder: (newOrder: CrewRunner[]) => void;
 }) {
   if (runners.length === 0) {
     return (
@@ -308,7 +313,7 @@ function RunnerList({
           dragDisabled={reordering}
           onSetLead={() => onSetLead(r.id)}
           onEdit={() => onEdit(r)}
-          onDelete={() => onDelete(r)}
+          onRemove={() => onRemove(r)}
           onReorderDrop={(fromIndex) => {
             if (fromIndex === i) return;
             const next = moveItem(runners, fromIndex, i);
@@ -334,16 +339,16 @@ function RunnerRow({
   dragDisabled,
   onSetLead,
   onEdit,
-  onDelete,
+  onRemove,
   onReorderDrop,
 }: {
-  runner: Runner;
+  runner: CrewRunner;
   index: number;
   total: number;
   dragDisabled: boolean;
   onSetLead: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  onRemove: () => void;
   onReorderDrop: (fromIndex: number) => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
@@ -449,7 +454,7 @@ function RunnerRow({
         </button>
         <button
           type="button"
-          onClick={onDelete}
+          onClick={onRemove}
           className="text-[#B91C1C] transition-colors hover:underline"
         >
           Remove

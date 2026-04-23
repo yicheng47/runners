@@ -23,7 +23,7 @@ use tauri::State;
 use ulid::Ulid as UlidGen;
 
 use crate::{
-    commands::{crew, runner},
+    commands::{crew, crew_runner},
     error::{Error, Result},
     model::{Mission, MissionStatus, Timestamp},
     AppState,
@@ -132,16 +132,17 @@ pub fn start(
 
     // Validate crew exists and is launchable.
     let crew = crew::get(conn, &input.crew_id)?;
-    let runners = runner::list(conn, &input.crew_id)?;
-    if runners.is_empty() {
+    let roster = crew_runner::list(conn, &input.crew_id)?;
+    if roster.is_empty() {
         return Err(Error::msg(format!(
             "crew {} has no runners; cannot start mission",
             crew.name
         )));
     }
-    // DB enforces `UNIQUE(crew_id) WHERE lead = 1` so we only need to check
-    // that at least one runner carries the flag.
-    if !runners.iter().any(|r| r.lead) {
+    // DB enforces `one_lead_per_crew` so at most one member is lead; we
+    // still check at least one carries the flag (defense in depth for any
+    // future path that could leave a crew leaderless).
+    if !roster.iter().any(|m| m.lead) {
         return Err(Error::msg(format!(
             "crew {} has no lead runner; cannot start mission",
             crew.name
@@ -350,7 +351,7 @@ pub async fn mission_get(state: State<'_, AppState>, id: String) -> Result<Missi
 mod tests {
     use super::*;
     use crate::commands::crew::CreateCrewInput;
-    use crate::commands::runner::CreateRunnerInput;
+    use crate::commands::runner::{self as runner_cmd, CreateRunnerInput};
     use crate::db;
 
     fn pool() -> db::DbPool {
@@ -371,10 +372,10 @@ mod tests {
     }
 
     fn add_runner(conn: &mut Connection, crew_id: &str, handle: &str) {
-        runner::create(
+        // C5.5: runners are global; membership goes through crew_runners.
+        let r = runner_cmd::create(
             conn,
             CreateRunnerInput {
-                crew_id: crew_id.into(),
                 handle: handle.into(),
                 display_name: handle.into(),
                 role: "test".into(),
@@ -387,6 +388,7 @@ mod tests {
             },
         )
         .unwrap();
+        crew_runner::add_runner(conn, crew_id, &r.id).unwrap();
     }
 
     #[test]
@@ -590,8 +592,9 @@ mod tests {
         let mut conn = pool.get().unwrap();
         let a = seed_crew(&conn, "A", None);
         let b = seed_crew(&conn, "B", None);
-        add_runner(&mut conn, &a, "lead");
-        add_runner(&mut conn, &b, "lead");
+        // C5.5: handles are globally unique — give each crew a distinct one.
+        add_runner(&mut conn, &a, "lead-a");
+        add_runner(&mut conn, &b, "lead-b");
         let tmp = tempfile::tempdir().unwrap();
 
         let m1 = start(

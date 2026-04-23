@@ -29,10 +29,12 @@ pub struct Crew {
     pub updated_at: Timestamp,
 }
 
+// Global runner definition. A runner can be referenced by zero or more
+// crews via `crew_runners`; `handle` is globally unique so @impl means
+// the same runner everywhere it appears in the event log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Runner {
     pub id: String,
-    pub crew_id: String,
     pub handle: String,
     pub display_name: String,
     pub role: String,
@@ -42,10 +44,31 @@ pub struct Runner {
     pub working_dir: Option<String>,
     pub system_prompt: Option<String>,
     pub env: HashMap<String, String>,
-    pub lead: bool,
-    pub position: i64,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+// A runner's membership in a specific crew (one row in `crew_runners`).
+// `position` and `lead` are per-crew: the same runner can sit at
+// position 0 in crew A and position 2 in crew B.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrewSlot {
+    pub crew_id: String,
+    pub runner_id: String,
+    pub position: i64,
+    pub lead: bool,
+    pub added_at: Timestamp,
+}
+
+// `Runner` plus the slot it occupies in a specific crew. Returned by
+// `crew_list_runners` so the UI can render a crew's roster in one shot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrewRunner {
+    #[serde(flatten)]
+    pub runner: Runner,
+    pub position: i64,
+    pub lead: bool,
+    pub added_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,11 +99,16 @@ pub enum SessionStatus {
     Crashed,
 }
 
+// A PTY run of a runner. `mission_id` is None for "direct chat" sessions
+// that the user opened from the Runners page without starting a mission.
+// `cwd` is carried on the session row so direct sessions have a working
+// directory even without a parent mission to inherit from.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
-    pub mission_id: String,
+    pub mission_id: Option<String>,
     pub runner_id: String,
+    pub cwd: Option<String>,
     pub status: SessionStatus,
     pub pid: Option<i64>,
     pub started_at: Option<Timestamp>,

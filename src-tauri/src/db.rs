@@ -105,28 +105,32 @@ mod tests {
         .unwrap();
     }
 
-    fn insert_runner(
-        conn: &Connection,
-        id: &str,
-        crew_id: &str,
-        handle: &str,
-        lead: i64,
-        position: i64,
-    ) -> rusqlite::Result<usize> {
+    fn insert_runner(conn: &Connection, id: &str, handle: &str) -> rusqlite::Result<usize> {
         conn.execute(
             "INSERT INTO runners (
-                id, crew_id, handle, display_name, role, runtime, command,
-                lead, position, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, 'impl', 'shell', 'sh', ?5, ?6, ?7, ?7)",
+                id, handle, display_name, role, runtime, command,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'impl', 'shell', 'sh', ?4, ?4)",
             params![
                 id,
-                crew_id,
                 handle,
                 format!("{handle} display"),
-                lead,
-                position,
                 "2026-04-22T00:00:00Z"
             ],
+        )
+    }
+
+    fn insert_crew_runner(
+        conn: &Connection,
+        crew_id: &str,
+        runner_id: &str,
+        position: i64,
+        lead: i64,
+    ) -> rusqlite::Result<usize> {
+        conn.execute(
+            "INSERT INTO crew_runners (crew_id, runner_id, position, lead, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![crew_id, runner_id, position, lead, "2026-04-22T00:00:00Z"],
         )
     }
 
@@ -137,12 +141,13 @@ mod tests {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name IN ('crews','runners','missions','sessions')",
+                 WHERE type = 'table' AND name IN
+                     ('crews','runners','crew_runners','missions','sessions')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 4);
+        assert_eq!(count, 5);
     }
 
     #[test]
@@ -170,9 +175,11 @@ mod tests {
         let pool = open_in_memory().unwrap();
         let conn = pool.get().unwrap();
         insert_crew(&conn, "c1");
+        insert_runner(&conn, "r1", "alpha").unwrap();
+        insert_runner(&conn, "r2", "beta").unwrap();
 
-        insert_runner(&conn, "r1", "c1", "lead", 1, 0).unwrap();
-        let err = insert_runner(&conn, "r2", "c1", "impl", 1, 1).unwrap_err();
+        insert_crew_runner(&conn, "c1", "r1", 0, 1).unwrap();
+        let err = insert_crew_runner(&conn, "c1", "r2", 1, 1).unwrap_err();
         assert_eq!(
             err.sqlite_error_code(),
             Some(ErrorCode::ConstraintViolation)
@@ -185,18 +192,47 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_crew(&conn, "c1");
         insert_crew(&conn, "c2");
+        insert_runner(&conn, "r1", "alpha").unwrap();
+        insert_runner(&conn, "r2", "beta").unwrap();
 
-        insert_runner(&conn, "r1", "c1", "lead", 1, 0).unwrap();
-        insert_runner(&conn, "r2", "c2", "lead", 1, 0).unwrap();
+        insert_crew_runner(&conn, "c1", "r1", 0, 1).unwrap();
+        insert_crew_runner(&conn, "c2", "r2", 0, 1).unwrap();
     }
 
     #[test]
-    fn unique_handle_within_crew() {
+    fn runner_handle_is_globally_unique() {
+        let pool = open_in_memory().unwrap();
+        let conn = pool.get().unwrap();
+        insert_runner(&conn, "r1", "shared").unwrap();
+        let err = insert_runner(&conn, "r2", "shared").unwrap_err();
+        assert_eq!(
+            err.sqlite_error_code(),
+            Some(ErrorCode::ConstraintViolation)
+        );
+    }
+
+    #[test]
+    fn same_runner_can_join_multiple_crews() {
         let pool = open_in_memory().unwrap();
         let conn = pool.get().unwrap();
         insert_crew(&conn, "c1");
-        insert_runner(&conn, "r1", "c1", "impl", 0, 0).unwrap();
-        let err = insert_runner(&conn, "r2", "c1", "impl", 0, 1).unwrap_err();
+        insert_crew(&conn, "c2");
+        insert_runner(&conn, "r1", "shared").unwrap();
+
+        insert_crew_runner(&conn, "c1", "r1", 0, 1).unwrap();
+        insert_crew_runner(&conn, "c2", "r1", 0, 1).unwrap();
+    }
+
+    #[test]
+    fn position_is_unique_per_crew() {
+        let pool = open_in_memory().unwrap();
+        let conn = pool.get().unwrap();
+        insert_crew(&conn, "c1");
+        insert_runner(&conn, "r1", "alpha").unwrap();
+        insert_runner(&conn, "r2", "beta").unwrap();
+
+        insert_crew_runner(&conn, "c1", "r1", 0, 1).unwrap();
+        let err = insert_crew_runner(&conn, "c1", "r2", 0, 0).unwrap_err();
         assert_eq!(
             err.sqlite_error_code(),
             Some(ErrorCode::ConstraintViolation)
@@ -221,9 +257,9 @@ mod tests {
         let args = serde_json::json!(["--flag", "--val=1"]);
         conn.execute(
             "INSERT INTO runners (
-                id, crew_id, handle, display_name, role, runtime, command,
-                args_json, env_json, lead, position, created_at, updated_at
-             ) VALUES ('r1','c1','impl','Impl','impl','shell','sh',?1,?2,0,0,?3,?3)",
+                id, handle, display_name, role, runtime, command,
+                args_json, env_json, created_at, updated_at
+             ) VALUES ('r1','impl','Impl','impl','shell','sh',?1,?2,?3,?3)",
             params![args.to_string(), env.to_string(), "2026-04-22T00:00:00Z"],
         )
         .unwrap();
@@ -262,20 +298,32 @@ mod tests {
     }
 
     #[test]
-    fn cascade_delete_removes_dependent_rows() {
+    fn deleting_crew_cascades_crew_runner_rows_only() {
+        // C5.5: runners are global — deleting a crew should strip its join
+        // rows but leave the runner itself intact so other crews (or a
+        // direct chat) can keep using it.
         let pool = open_in_memory().unwrap();
         let conn = pool.get().unwrap();
         insert_crew(&conn, "c1");
-        insert_runner(&conn, "r1", "c1", "lead", 1, 0).unwrap();
+        insert_runner(&conn, "r1", "alpha").unwrap();
+        insert_crew_runner(&conn, "c1", "r1", 0, 1).unwrap();
 
         conn.execute("DELETE FROM crews WHERE id = 'c1'", [])
             .unwrap();
-        let count: i64 = conn
+        let runner_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM runners WHERE id = 'r1'", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(count, 0);
+        let slot_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM crew_runners WHERE runner_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(runner_count, 1, "runner row must survive crew delete");
+        assert_eq!(slot_count, 0, "membership row cascades away");
     }
 
     #[test]

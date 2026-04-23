@@ -1,10 +1,14 @@
-// Add a runner to a crew.
+// Add a runner slot to a crew (C5.5).
 //
-// The form mirrors the Rust CreateRunnerInput minus `env` (deferred to
-// v0.x — the UI surface is not yet justified for MVP). `args` is a single
-// shell-style text field split on whitespace client-side; keep the split
-// rule dumb and obvious (no shell quoting) until a user actually needs
-// spaces in an arg. Backend still re-validates the handle.
+// Two invokes per submit: create the global runner, then join it to the
+// crew. Errors surface a best-effort cleanup — if the runner was created
+// but the add-to-crew step fails, we delete the orphan so the user isn't
+// left with a ghost runner in their global list.
+//
+// `args` is a single shell-style text field split on whitespace
+// client-side; keep the split rule dumb and obvious (no shell quoting)
+// until a user actually needs spaces in an arg. Backend re-validates the
+// handle.
 
 import { useEffect, useState } from "react";
 
@@ -77,22 +81,35 @@ export function AddSlotModal({
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
+    const input: CreateRunnerInput = {
+      handle,
+      display_name: displayName.trim(),
+      role: role.trim(),
+      runtime,
+      command: command.trim(),
+      args: argsText.trim() ? argsText.trim().split(/\s+/) : [],
+      working_dir: workingDir.trim() || null,
+      system_prompt: systemPrompt.trim() || null,
+    };
+    let createdRunnerId: string | null = null;
     try {
-      const input: CreateRunnerInput = {
-        crew_id: crewId,
-        handle,
-        display_name: displayName.trim(),
-        role: role.trim(),
-        runtime,
-        command: command.trim(),
-        args: argsText.trim() ? argsText.trim().split(/\s+/) : [],
-        working_dir: workingDir.trim() || null,
-        system_prompt: systemPrompt.trim() || null,
-      };
-      await api.runner.create(input);
+      // Step 1: create the global runner.
+      const runner = await api.runner.create(input);
+      createdRunnerId = runner.id;
+      // Step 2: attach it to this crew as a slot. If this fails (e.g. the
+      // crew was deleted mid-flight), roll back the runner so we don't
+      // leave orphans in the global list.
+      await api.crew.addRunner(crewId, runner.id);
       await onCreated();
     } catch (e) {
       setError(String(e));
+      if (createdRunnerId) {
+        try {
+          await api.runner.delete(createdRunnerId);
+        } catch {
+          // Best-effort cleanup — surface the original error to the user.
+        }
+      }
     } finally {
       setSubmitting(false);
     }

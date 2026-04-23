@@ -1,11 +1,23 @@
--- Migration 0001: initial schema.
+-- Migration 0001: initial schema (shared-runner edition).
 --
--- Mirrors docs/arch/v0-arch.md §7.1 verbatim (four tables + the
--- one_lead_per_crew partial unique index). The signal_types column is
--- seeded with the built-in MVP allowlist via DEFAULT so every crew row
--- passes arch §5.3 Layer 2 validation without extra wiring. Users may
--- extend the list post-v0; in MVP the allowlist is write-only from the
--- DB layer.
+-- Superseded the per-crew runner model from the original v0 draft. See
+-- docs/impls/v0-mvp-c5-5-shared-runners.md. In MVP (no prod data yet) we
+-- rewrite DDL in place rather than layering a 0002 migration. Dev users
+-- delete their local DB file ($APPDATA/runners/runners.db) once to pick
+-- up the new shape.
+--
+-- Overview:
+--   - crews        — named groups. Own the orchestrator_policy + signal
+--                    allowlist. No direct runner column: composition lives
+--                    in crew_runners.
+--   - runners      — global, shareable. One handle = one runner everywhere
+--                    it appears in the event log.
+--   - crew_runners — join: crew <-> runner, with per-crew position + lead
+--                    invariant enforced by a partial unique index.
+--   - missions     — scoped to a crew. Spawns one session per crew_runner.
+--   - sessions     — a PTY run of a runner. mission_id is nullable:
+--                    "direct chat" sessions exist without a mission
+--                    (cwd lives on the session row in that case).
 
 CREATE TABLE crews (
     id TEXT PRIMARY KEY,
@@ -20,8 +32,7 @@ CREATE TABLE crews (
 
 CREATE TABLE runners (
     id TEXT PRIMARY KEY,
-    crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
-    handle TEXT NOT NULL,
+    handle TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     role TEXT NOT NULL,
     runtime TEXT NOT NULL,
@@ -30,14 +41,21 @@ CREATE TABLE runners (
     working_dir TEXT,
     system_prompt TEXT,
     env_json TEXT,
-    lead INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (crew_id, handle)
+    updated_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX one_lead_per_crew ON runners(crew_id) WHERE lead = 1;
+CREATE TABLE crew_runners (
+    crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+    runner_id TEXT NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    lead INTEGER NOT NULL DEFAULT 0,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (crew_id, runner_id),
+    UNIQUE (crew_id, position)
+);
+
+CREATE UNIQUE INDEX one_lead_per_crew ON crew_runners(crew_id) WHERE lead = 1;
 
 CREATE TABLE missions (
     id TEXT PRIMARY KEY,
@@ -52,8 +70,9 @@ CREATE TABLE missions (
 
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL,
     runner_id TEXT NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
+    cwd TEXT,
     status TEXT NOT NULL,
     pid INTEGER,
     started_at TEXT,
