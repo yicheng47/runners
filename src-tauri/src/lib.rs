@@ -7,15 +7,19 @@ mod orchestrator;
 mod session;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::Manager;
 
 pub struct AppState {
-    pub db: db::DbPool,
+    pub db: Arc<db::DbPool>,
     /// Root of the app's per-user data tree — `$APPDATA/runners/` on real
     /// installs, a tempdir in tests. Mission commands resolve event-log paths
     /// relative to this via `runners_core::event_log::path`.
     pub app_data_dir: PathBuf,
+    /// Live per-mission PTY sessions. Created at app start, shared across
+    /// all Tauri commands and the reader threads they spawn.
+    pub sessions: Arc<session::SessionManager>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,10 +34,11 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
             let db_path = app_data_dir.join("runners.db");
-            let pool = db::open_pool(&db_path)?;
+            let pool = Arc::new(db::open_pool(&db_path)?);
             app.manage(AppState {
                 db: pool,
                 app_data_dir,
+                sessions: session::SessionManager::new(),
             });
             Ok(())
         })
@@ -58,6 +63,9 @@ pub fn run() {
             commands::mission::mission_stop,
             commands::mission::mission_list,
             commands::mission::mission_get,
+            commands::session::session_list,
+            commands::session::session_inject_stdin,
+            commands::session::session_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

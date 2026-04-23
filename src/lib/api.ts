@@ -3,7 +3,7 @@
 // Tauri auto-converts top-level arg names between camelCase (JS) and
 // snake_case (Rust), so `crewId` here maps to `crew_id` in the Rust
 // handlers. Nested struct fields pass through unchanged — `input` objects
-// match the Rust struct shapes in src-tauri/src/commands/{crew,runner,crew_runner,mission}.rs,
+// match the Rust struct shapes in src-tauri/src/commands/{crew,runner,crew_runner,mission,session}.rs,
 // mirrored by src/lib/types.ts.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -17,11 +17,17 @@ import type {
   Mission,
   Runner,
   RunnerActivity,
+  Session,
   StartMissionInput,
   StartMissionOutput,
   UpdateCrewInput,
   UpdateRunnerInput,
 } from "./types";
+
+/** Session row joined with the runner's handle for UI labels. */
+export interface SessionRow extends Session {
+  handle: string;
+}
 
 export const api = {
   crew: {
@@ -61,5 +67,12 @@ export const api = {
     start: (input: StartMissionInput) =>
       invoke<StartMissionOutput>("mission_start", { input }),
     stop: (id: string) => invoke<Mission>("mission_stop", { id }),
+  },
+  session: {
+    list: (missionId: string) =>
+      invoke<SessionRow[]>("session_list", { missionId }),
+    injectStdin: (sessionId: string, text: string) =>
+      invoke<void>("session_inject_stdin", { sessionId, text }),
+    kill: (sessionId: string) => invoke<void>("session_kill", { sessionId }),
   },
 };

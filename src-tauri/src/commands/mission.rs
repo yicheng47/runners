@@ -320,14 +320,68 @@ fn write_signal_types_sidecar(
 #[tauri::command]
 pub async fn mission_start(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     input: StartMissionInput,
 ) -> Result<StartMissionOutput> {
-    let mut conn = state.db.get()?;
-    start(&mut conn, &state.app_data_dir, input)
+    use crate::session::manager::{SessionEvents, TauriSessionEvents};
+    use std::sync::Arc;
+
+    let out = {
+        let mut conn = state.db.get()?;
+        start(&mut conn, &state.app_data_dir, input)?
+    };
+
+    // Mission row + opening events are durable. Now spawn one PTY per
+    // runner. This loop is **all-or-nothing**: if any spawn fails we kill
+    // the sessions we already created, flip the mission to `aborted`, and
+    // return the error. Without this the caller could see "err" while the
+    // crew still has half a live mission that blocks future starts via
+    // the one-live-mission-per-crew invariant.
+    //
+    // Post-C5.5a the roster lives in `crew_runners`, so we join through it
+    // instead of listing global runners.
+    let roster = {
+        let conn = state.db.get()?;
+        crew_runner::list(&conn, &out.mission.crew_id)?
+    };
+    let events_log_path =
+        event_log::events_path(&state.app_data_dir, &out.mission.crew_id, &out.mission.id);
+    let emitter: Arc<dyn SessionEvents> = Arc::new(TauriSessionEvents(app.clone()));
+    for member in roster {
+        let spawn_res = state.sessions.spawn(
+            &out.mission,
+            &member.runner,
+            &state.app_data_dir,
+            events_log_path.clone(),
+            state.db.clone(),
+            Arc::clone(&emitter),
+        );
+        if let Err(e) = spawn_res {
+            // Rollback: kill the sessions that did start, mark the mission
+            // aborted so the crew isn't stuck behind a phantom `running`,
+            // then surface the original spawn error.
+            let _ = state.sessions.kill_all_for_mission(&out.mission.id);
+            if let Ok(conn) = state.db.get() {
+                let _ = conn.execute(
+                    "UPDATE missions
+                        SET status = 'aborted', stopped_at = ?1
+                      WHERE id = ?2",
+                    rusqlite::params![Utc::now().to_rfc3339(), out.mission.id],
+                );
+            }
+            return Err(e);
+        }
+    }
+    Ok(out)
 }
 
 #[tauri::command]
 pub async fn mission_stop(state: State<'_, AppState>, id: String) -> Result<Mission> {
+    // Kill first, then flip the mission row. `kill_all_for_mission` blocks
+    // until every reader thread has joined — which means every child has
+    // been reaped and every `sessions` row has reached a terminal status.
+    // Only then is it honest to call the mission `completed`.
+    state.sessions.kill_all_for_mission(&id)?;
     let mut conn = state.db.get()?;
     stop(&mut conn, &state.app_data_dir, &id)
 }

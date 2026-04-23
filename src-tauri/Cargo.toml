@@ -31,3 +31,9 @@ ulid = { workspace = true }
 # Regular dep (not dev-only) because the sidecar writer needs
 # NamedTempFile::persist for a Windows-safe atomic replace.
 tempfile = "3"
+portable-pty = "0.8"
+
+# Unix-only: SIGTERM/SIGKILL escalation inside SessionManager::kill. Windows
+# gets a different path in a future chunk (v0 scope is macOS + Linux).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
