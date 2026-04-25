@@ -188,21 +188,23 @@ impl EventBus {
                     eprintln!("event_bus[{mission_id_for_thread}]: initial tick failed: {e}");
                 }
                 loop {
-                    if shutdown_for_thread.load(Ordering::SeqCst) {
-                        return;
-                    }
                     // recv_timeout lets us notice shutdown without a notify
                     // event arriving; also serves as a slow-poll safety net
                     // in case notify drops something.
-                    match rx.recv_timeout(Duration::from_millis(500)) {
-                        Ok(WatchPing::FsEvent) | Err(_) => {
-                            if shutdown_for_thread.load(Ordering::SeqCst) {
-                                return;
-                            }
-                            if let Err(e) = state.tick(&log, emitter_for_thread.as_ref()) {
-                                eprintln!("event_bus[{mission_id_for_thread}]: tick failed: {e}");
-                            }
-                        }
+                    let _ = rx.recv_timeout(Duration::from_millis(500));
+                    let shutting = shutdown_for_thread.load(Ordering::SeqCst);
+                    // Always tick, even when shutting down: `mission_stop`
+                    // appends the terminal `mission_stopped` event *before*
+                    // calling unmount, and clients need to see it via
+                    // `event/appended` before the bus tears down. Without
+                    // this final drain, the consumer can wake on the
+                    // shutdown flag and exit before notify delivered the
+                    // terminal write, dropping the event silently.
+                    if let Err(e) = state.tick(&log, emitter_for_thread.as_ref()) {
+                        eprintln!("event_bus[{mission_id_for_thread}]: tick failed: {e}");
+                    }
+                    if shutting {
+                        return;
                     }
                 }
             })
@@ -296,18 +298,20 @@ impl BusState {
                 event: event.clone(),
             });
 
-            // inbox_read signals advance watermarks; do this *before*
-            // projecting the event into inboxes so a runner's own read
-            // signal doesn't show up as an unread item in their projection
-            // (signals with no `to` would otherwise project everywhere).
+            // inbox_read signals advance watermarks; handle them and move on.
+            // Other signals (mission_start, mission_goal, ask_lead, …) never
+            // project into inboxes — per arch §2.7 the inbox is strictly
+            // `kind = "message" AND (to = null OR to = h)`.
             if Self::is_inbox_read(&event) {
                 self.handle_inbox_read(&event, emitter);
                 continue;
             }
+            if !matches!(event.kind, EventKind::Message) {
+                continue;
+            }
 
-            // Project into matching inboxes. Per arch §5.5 the inbox
-            // includes broadcast events (`to == null`) and direct mail
-            // (`to == handle`).
+            // Project into matching inboxes. Broadcasts (`to == null`) land in
+            // every roster member's inbox; directs land in exactly one.
             for handle in self.handles.clone() {
                 if event_targets(&event, &handle) {
                     let inbox = self.inbox.entry(handle.clone()).or_default();
@@ -731,6 +735,107 @@ mod tests {
             cap.appended.lock().unwrap().len(),
             1,
             "no events should arrive after unmount"
+        );
+    }
+
+    #[test]
+    fn signals_never_enter_inbox_projection() {
+        // Regression for review finding #1: inbox is messages-only per arch
+        // §2.7 (`kind = "message" AND (to = null OR to = h)`). Signals with
+        // no `to` would otherwise show up as unread for every roster member,
+        // so a brand-new mission would start with a bogus unread count from
+        // its own `mission_start` + `mission_goal` opening events.
+        let dir = fresh_mission_dir();
+        let log = EventLog::open(dir.path()).unwrap();
+        log.append(signal("system", "mission_start", serde_json::json!({})))
+            .unwrap();
+        log.append(signal(
+            "human",
+            "mission_goal",
+            serde_json::json!({ "text": "ship it" }),
+        ))
+        .unwrap();
+        log.append(signal(
+            "coder",
+            "ask_lead",
+            serde_json::json!({ "question": "?" }),
+        ))
+        .unwrap();
+
+        let cap = Arc::new(Capture::default());
+        let _bus = EventBus::for_mission(
+            "mission".into(),
+            dir.path(),
+            &["lead".to_string(), "coder".to_string()],
+            cap_dyn(&cap),
+        )
+        .unwrap();
+
+        wait_until(1000, || cap.appended.lock().unwrap().len() == 3);
+        assert_eq!(
+            cap.appended.lock().unwrap().len(),
+            3,
+            "all signals appended"
+        );
+        // Critical: no inbox_updated emissions for these signals.
+        assert!(
+            cap.inbox.lock().unwrap().is_empty(),
+            "signals must not project into inboxes; got {:?}",
+            cap.inbox.lock().unwrap()
+        );
+
+        // Now post a real message — it must inbox normally for both runners.
+        log.append(message("lead", None, "broadcast")).unwrap();
+        wait_until(3000, || cap.inbox.lock().unwrap().len() == 2);
+        assert_eq!(
+            cap.inbox.lock().unwrap().len(),
+            2,
+            "broadcast message should inbox for both lead and coder"
+        );
+    }
+
+    #[test]
+    fn unmount_drains_pending_writes_before_exiting() {
+        // Regression for review finding #2: writes that landed just before
+        // `unmount` must surface via `event/appended` even if the consumer
+        // hadn't ticked them yet. Simulates `mission_stop`'s real ordering:
+        // append the terminal event, then call unmount immediately.
+        let dir = fresh_mission_dir();
+        let _log_init = EventLog::open(dir.path()).unwrap();
+
+        let cap = Arc::new(Capture::default());
+        let registry = BusRegistry::new();
+        registry
+            .mount(
+                "mission".into(),
+                dir.path(),
+                &["lead".to_string()],
+                cap_dyn(&cap),
+            )
+            .unwrap();
+        // Let the initial replay settle.
+        wait_until(200, || true);
+
+        let log = EventLog::open(dir.path()).unwrap();
+        log.append(signal("system", "mission_stopped", serde_json::json!({})))
+            .unwrap();
+        // Mirror mission_stop: unmount immediately after the append. The
+        // consumer must do one final tick on its way out.
+        registry.unmount("mission");
+
+        let appended = cap.appended.lock().unwrap();
+        assert!(
+            appended.iter().any(|a| a
+                .event
+                .signal_type
+                .as_ref()
+                .map(|t| t.as_str() == "mission_stopped")
+                .unwrap_or(false)),
+            "terminal event must surface before bus tears down; got {:?}",
+            appended
+                .iter()
+                .map(|a| a.event.signal_type.as_ref().map(|t| t.as_str().to_string()))
+                .collect::<Vec<_>>()
         );
     }
 }
