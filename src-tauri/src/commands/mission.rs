@@ -323,6 +323,7 @@ pub async fn mission_start(
     app: tauri::AppHandle,
     input: StartMissionInput,
 ) -> Result<StartMissionOutput> {
+    use crate::event_bus::{BusEmitter, TauriBusEvents};
     use crate::session::manager::{SessionEvents, TauriSessionEvents};
     use std::sync::Arc;
 
@@ -346,6 +347,36 @@ pub async fn mission_start(
     };
     let events_log_path =
         event_log::events_path(&state.app_data_dir, &out.mission.crew_id, &out.mission.id);
+
+    // Mount the event-bus watcher *before* spawning sessions. The opening
+    // events are already on disk (start() emitted them under the same DB
+    // tx), so the bus's initial replay will pick up `mission_start` and
+    // `mission_goal` and surface them to the UI. Mounting before spawn
+    // also means anything a runner writes to the log on startup is
+    // observed without a race against the watcher attaching.
+    let mission_dir =
+        event_log::mission_dir(&state.app_data_dir, &out.mission.crew_id, &out.mission.id);
+    let roster_handles: Vec<String> = roster.iter().map(|m| m.runner.handle.clone()).collect();
+    let bus_emitter: Arc<dyn BusEmitter> = Arc::new(TauriBusEvents(app.clone()));
+    if let Err(e) = state.buses.mount(
+        out.mission.id.clone(),
+        &mission_dir,
+        &roster_handles,
+        bus_emitter,
+    ) {
+        // Roll back the mission row so the crew isn't stuck behind a
+        // phantom `running` if the watcher couldn't attach.
+        if let Ok(conn) = state.db.get() {
+            let _ = conn.execute(
+                "UPDATE missions
+                    SET status = 'aborted', stopped_at = ?1
+                  WHERE id = ?2",
+                rusqlite::params![Utc::now().to_rfc3339(), out.mission.id],
+            );
+        }
+        return Err(e);
+    }
+
     let emitter: Arc<dyn SessionEvents> = Arc::new(TauriSessionEvents(app.clone()));
     for member in roster {
         let spawn_res = state.sessions.spawn(
@@ -357,10 +388,11 @@ pub async fn mission_start(
             Arc::clone(&emitter),
         );
         if let Err(e) = spawn_res {
-            // Rollback: kill the sessions that did start, mark the mission
-            // aborted so the crew isn't stuck behind a phantom `running`,
-            // then surface the original spawn error.
+            // Rollback: kill the sessions that did start, drop the bus,
+            // mark the mission aborted so the crew isn't stuck behind a
+            // phantom `running`, then surface the original spawn error.
             let _ = state.sessions.kill_all_for_mission(&out.mission.id);
+            state.buses.unmount(&out.mission.id);
             if let Ok(conn) = state.db.get() {
                 let _ = conn.execute(
                     "UPDATE missions
@@ -383,7 +415,12 @@ pub async fn mission_stop(state: State<'_, AppState>, id: String) -> Result<Miss
     // Only then is it honest to call the mission `completed`.
     state.sessions.kill_all_for_mission(&id)?;
     let mut conn = state.db.get()?;
-    stop(&mut conn, &state.app_data_dir, &id)
+    let mission = stop(&mut conn, &state.app_data_dir, &id)?;
+    // Drop the bus *after* the terminal `mission_stopped` event is on
+    // disk, so the watcher gets one last tick and clients see it before
+    // the bus tears down. unmount() is idempotent and never fails.
+    state.buses.unmount(&id);
+    Ok(mission)
 }
 
 #[tauri::command]

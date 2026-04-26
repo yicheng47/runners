@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import type { Crew, Mission, SessionStatus } from "../lib/types";
 import { api, SessionRow } from "../lib/api";
+import { AppShell } from "../components/AppShell";
 
 interface OutputEvent {
   session_id: string;
@@ -151,14 +152,12 @@ export default function Debug() {
   const paneList = useMemo(() => Object.values(sessions), [sessions]);
 
   return (
-    <div className="min-h-screen bg-neutral-50 p-6 font-mono text-sm text-neutral-900">
-      <div className="mx-auto max-w-5xl space-y-4">
-        <header className="flex items-baseline justify-between">
-          <h1 className="text-lg font-semibold">C6 Debug — PTY scratch</h1>
-          <a href="#/crews" className="text-xs text-blue-600 underline">
-            back to crews
-          </a>
-        </header>
+    <AppShell>
+      <div className="flex-1 overflow-y-auto bg-neutral-50 p-6 font-mono text-sm text-neutral-900">
+        <div className="mx-auto max-w-5xl space-y-4">
+          <header>
+            <h1 className="text-lg font-semibold">C6 Debug — PTY scratch</h1>
+          </header>
 
         <section className="space-y-2 rounded border border-neutral-300 bg-white p-4">
           <div className="grid grid-cols-2 gap-3">
@@ -280,7 +279,8 @@ export default function Debug() {
             </div>
           ))}
         </section>
+        </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

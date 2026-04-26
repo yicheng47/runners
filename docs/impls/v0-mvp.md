@@ -8,7 +8,7 @@
 
 From a clean launch of the app, a user can:
 
-1. Create a **Crew** on the Crews page, then add two runners to it (one `claude-code` lead, one `shell` worker) on the **Crew Detail** page. Runners are crew-scoped — there is no shared "template" concept in v0 (per PRD §3). The lead invariant is enforced end-to-end.
+1. Create a **Crew** on the Crews page, then add two runners to it (one `claude-code` lead, one `shell` worker) on the **Crew Detail** page. Per C5.5a, runners are top-level config and shared across crews — adding a runner to a crew creates a `crew_runners` membership row, not a new runner. The lead invariant is per-crew (one lead per crew, enforced via partial unique index on `crew_runners`) and is checked end-to-end.
 2. Click **Start Mission**, fill the goal, and see the Mission workspace open with two live PTY sessions.
 3. Watch the lead runner receive the goal via stdin, draft a plan, and post a directed message to the worker; see the worker pick it up on its next `runners msg read`.
 4. See a worker emit an `ask_lead` signal; watch the lead decide to escalate via `ask_human`; click **Approve** on the resulting card; see the lead receive the response and forward it to the worker.
@@ -46,7 +46,8 @@ Anything beyond this is explicitly v0.x or later.
     │     │
     │     └─► C5  mission lifecycle commands
     │           │
-    │           ├─► C6  PTY session runtime ─► C9  `runners` CLI
+    │           ├─► C6  PTY session runtime ─► C9    `runners` CLI
+    │           │                          └─► C8.5  Runners page + Runner Detail + direct chat
     │           │
     │           └─► C7  event bus + notify watcher ─► C8  orchestrator v0
     │
@@ -56,7 +57,7 @@ Anything beyond this is explicitly v0.x or later.
   C11  missions list + Start Mission modal   (depends on C3, C5, C10)
 ```
 
-C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel after C5. Everything else is serial.
+C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel after C5. C8 (orchestrator) and C8.5 (Runners page) are peers — both depend on C6, neither depends on the other, so they can ship in either order.
 
 ---
 
@@ -79,18 +80,22 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 ## C2 — Config CRUD (runners, crews, lead invariant)
 
-**Goal.** Tauri commands for managing crews and their crew-scoped runners, with the lead invariant enforced at the Rust layer in addition to the DB.
+**Goal.** Tauri commands for managing crews and (top-level, sharable) runners, with the per-crew lead invariant enforced at the Rust layer in addition to the DB.
+
+**Note (post-C5.5a).** This section was originally written for the per-crew runner model. C5.5a moved runner CRUD onto the global `runners` table and put crew membership on `crew_runners`; the live commands match that shape. The descriptions below reflect what actually shipped.
 
 **Deliverables.**
 - `src-tauri/src/commands/crew.rs` — `crew_list`, `crew_create`, `crew_update`, `crew_delete`.
-- `src-tauri/src/commands/runner.rs` — `runner_list(crew_id)`, `runner_create`, `runner_update`, `runner_delete`, `runner_reorder(crew_id, ordered_ids)`, `runner_set_lead(runner_id)`.
+- `src-tauri/src/commands/runner.rs` — `runner_list` (global, no crew arg), `runner_get`, `runner_create`, `runner_update`, `runner_delete`, `runner_activity`. Runners exist independently of any crew.
+- `src-tauri/src/commands/crew_runner.rs` — membership commands: `crew_list_runners(crew_id)`, `crew_add_runner(crew_id, runner_id)`, `crew_remove_runner(crew_id, runner_id)`, `crew_set_lead(crew_id, runner_id)`, `crew_reorder(crew_id, ordered_runner_ids)`.
 - Invariant rules encoded in Rust:
-  - First runner added to a crew is auto-lead.
-  - `runner_set_lead` runs in a transaction: unset old lead, set new lead, single commit.
-  - Deleting the lead while other runners remain auto-promotes the runner at the lowest `position`.
-  - Deleting the last runner of a crew is allowed (crew becomes empty, unstartable).
+  - First runner added to a crew is auto-lead (membership-level, not runner-level).
+  - `crew_set_lead` runs in a transaction: unset old lead, set new lead, single commit.
+  - Removing the lead from a crew while other members remain auto-promotes the runner at the lowest `position`.
+  - Removing the last member of a crew is allowed (crew becomes empty, unstartable).
+  - Deleting a runner globally cascades through `crew_runners` (`ON DELETE CASCADE`); deleting a crew cascades through `crew_runners` but **does not** delete the runner row itself.
 
-**Tests.** `cargo test` covers: auto-lead on first insert, forbidden second lead, lead auto-promotion on delete, atomic reassign.
+**Tests.** `cargo test` covers: auto-lead on first membership insert, forbidden second lead per crew, lead auto-promotion on remove, atomic reassign, runner survives crew delete, same runner can join multiple crews and be lead in each independently.
 
 **Out of scope.** UI, mission, PTY.
 
@@ -100,7 +105,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 **Goal.** Wire the config CRUD to the wireframes in `design/runners-design.pen`. This is the first chunk a non-engineer can interact with.
 
-**Scope note — no top-level Runners page in MVP.** Runners are crew-scoped per PRD §3. The design file's standalone "Runners" list and "Runner Detail" frames are kept for a future v0.x surface (a cross-crew runner browser) but are *not* built in MVP. Runner CRUD happens inside Crew Detail via Add Slot and an inline edit drawer.
+**Scope note — Runners are top-level in MVP, but the dedicated Runners pages land in C8.5.** C5.5a (`v0-mvp-c5-5-shared-runners.md`) already moved runners out from under crews and made the same runner shareable across crews; the data model has no notion of "crew-scoped runner" anymore. C3 still does runner CRUD inside Crew Detail (Add Slot + edit drawer) because that's the path the demo flow needs. The standalone Runners list and Runner Detail frames in `design/runners-design.pen` (`2Oecf`, `ocAFJ`) are built in C8.5 (sibling chunk of C8 orchestrator).
 
 **Deliverables.**
 - `src/pages/Crews.tsx` — crew cards (create, list, delete).
@@ -111,7 +116,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 **Manual test plan.** Create a crew, add two runners, reassign lead, delete lead, confirm auto-promotion to the next runner by `position`.
 
-**Out of scope.** Mission workspace, Start Mission modal. Standalone Runners list/detail pages (design exists, MVP does not build them).
+**Out of scope.** Mission workspace, Start Mission modal. The standalone Runners list / Runner Detail pages (frames `2Oecf` and `ocAFJ` in the design) ship in **C8.5**, not C3.
 
 ---
 
@@ -206,6 +211,42 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 **Tests.** Each built-in rule fires exactly once. Replay after reopen reconstructs state from the log. `human_response` without a matching `human_question` is dropped with a log warning, not panic.
 
 **Out of scope.** LLM policy, user-authored rules. MVP ships only the built-ins plus a no-op policy slot.
+
+---
+
+## C8.5 — Runners page + Runner Detail + direct chat
+
+**Goal.** Promote runners to a top-level UI surface, mirroring the design's `2Oecf` (Runners list) and `ocAFJ` (Runner Detail) frames, plus a "Chat now" path that exercises the direct-chat session shape C5.5a already baked into the schema. Without this chunk, runners that aren't in any crew are invisible and the user can never spawn a runner without going through a full mission.
+
+**Why it sits at C8.5.** Sibling/parallel to C8 (orchestrator) — both depend on C6 and neither depends on the other, following the C5.5a precedent for inserted chunks. The orchestrator and the Runners page can ship in either order; this just records that the work is part of v0-mvp, not deferred.
+
+**Scope-shift context.** Originally cut from MVP under the C3 "no top-level Runners page" scope note, now restored: the C5.5a schema work is wasted UI-side until this lands.
+
+**Deliverables.**
+- **Backend.**
+  - `commands/runner.rs::runner_list_with_activity()` — extends the existing `runner_list` to include `running_session_count` (from `sessions WHERE status = 'running'`) and `open_mission_count` (from `crew_runners ⨝ missions WHERE status = 'running'`). The Runners list cards need both counters.
+  - `commands/runner.rs::runner_get_by_handle(handle)` — used by `/runners/:handle` so the URL is stable across runner-id rotations.
+  - `commands/session.rs::session_start_direct(runner_id, cwd)` — inserts a `sessions` row with `mission_id = NULL` and the chosen `cwd`, then spawns through the existing `SessionManager::spawn` path. Differences from the mission flavor: no `RUNNERS_MISSION_ID`, `RUNNERS_EVENT_LOG`, or `RUNNERS_CREW_ID` env vars are set, and the runner does not join any event bus or orchestrator. The `runners` CLI must no-op gracefully when those vars are absent (small change in C9-land — the CLI errors today on `RUNNERS_EVENT_LOG`-not-set, which would crash a direct-chat agent the moment it tries to emit an event).
+  - Live activity events: `SessionManager` emits `runner/activity { runner_id, running_sessions, open_missions }` on every spawn, reap, and kill so the Runners list and Runner Detail can update without polling.
+- **Frontend.**
+  - `src/components/Sidebar.tsx` — flip the placeholder Runner item to an enabled `NavLink to="/runners"`. Order in the design is Runner / Crew / Mission, top to bottom.
+  - `src/pages/Runners.tsx` — vertical stack of `RunnerCard`s, header with `+ New runner`, dashed empty-state card. Same visual vocabulary as `Crews.tsx`. Subscribes to `runner/activity` for live counters.
+  - `src/components/CreateRunnerModal.tsx` — extracted from `CrewEditor.tsx`'s anonymous "Add Slot" modal so both surfaces reuse one component. The Crew Detail flow keeps adding *existing* runners through Add Slot, plus this same modal as a "create new" affordance.
+  - `src/pages/RunnerDetail.tsx` (`/runners/:handle`) — two columns matching `ocAFJ`: left has `Default system prompt` (with the same edit-drawer behavior C3 ships) and `Crews using this runner` (LEAD badge per row, deep-link into Crew Detail); right has `Activity` (counts + clickable list of open sessions) and `Details` (handle, runtime, created, ID). Header shows breadcrumb `Runners › @handle`, role badge, and two actions: `Edit` (opens `RunnerEditDrawer`) and `Chat now`.
+  - **Chat now flow.** Opens a small dialog asking for working directory (defaulting to the runner's own `working_dir` if set), calls `session_start_direct`, then routes to a new pane modeled on the C6 debug page minus the mission/runners-rail concepts. Route shape `/runners/:handle/chat/:sessionId` so multiple direct chats can stay open across runners.
+
+**Tests.**
+- Backend: `runner_list_with_activity` returns zero counters for a brand-new runner; reflects running mission sessions; reflects direct-chat sessions independently. Deleting a mission must leave its session row counted under the runner (per `sessions.mission_id ON DELETE SET NULL`) until the session itself is reaped.
+- Backend: `session_start_direct` against `/bin/cat` → row has `mission_id IS NULL`, stdin injection round-trips, kill reaps cleanly, status reaches `stopped`. Concurrent direct chats on the same runner work and don't fight for the runner's `working_dir`.
+- Backend: starting a direct session does **not** affect mission invariants — a crew that already has a live mission can still be inspected, and a direct chat does not block its lead's other crew from starting a new mission.
+- Frontend: `/runners` renders with mocked activity payloads; sidebar routing; opening Runner Detail; round-trip the edit drawer; clicking a crew row navigates to `/crews/{id}`; Chat now opens the chat pane and bytes flow.
+
+**Out of scope.**
+- A persistent transcript log per direct-chat session. Direct chats are ephemeral by design — the C6 scrollback ring is the only memory. A real transcript would need its own append-only store and is deferred to v0.x.
+- Renaming a `handle`. Globally-unique handles + cross-crew membership make immutability load-bearing — renaming would silently change `from`/`to` semantics on every historical event. Runner Detail surfaces only `display_name` as editable; a tooltip on `handle` explains why it's locked.
+- Cross-window sync for activity counters. We don't ship multi-window in MVP.
+
+**Manual test plan.** From the sidebar's Runner item, land on Runners list; verify activity badges; create a fresh runner from the Runners page (not from inside a crew); open its detail; verify the empty Crews-using-this-runner section; click Chat now; type a command into the runner's CLI and see output; close the chat; check that the activity counter on the list page dropped back to zero.
 
 ---
 

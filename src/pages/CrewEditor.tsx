@@ -138,8 +138,11 @@ export default function CrewEditor() {
 
   return (
     <AppShell>
-      {/* Top toolbar */}
-      <div className="flex items-center justify-between gap-4 border-b border-[#E5E5E5] bg-white px-8 py-4">
+      {/* Top toolbar — `pt-9` (36px) reserves the macOS title-bar /
+          drag-region row at the top so the AppShell strip doesn't overlay
+          our controls (the strip is z-10 above this toolbar; controls
+          inside `pt-9` start at y≈36, well below the strip's y=28). */}
+      <div className="flex items-center justify-between gap-4 border-b border-[#E5E5E5] bg-white px-8 pb-4 pt-9">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <Link
             to="/crews"

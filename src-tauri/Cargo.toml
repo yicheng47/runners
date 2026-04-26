@@ -32,6 +32,10 @@ ulid = { workspace = true }
 # NamedTempFile::persist for a Windows-safe atomic replace.
 tempfile = "3"
 portable-pty = "0.8"
+# Filesystem watcher for the per-mission event-log tail (C7). The
+# `macos_fsevent` backend is the default on macOS; on Linux it falls back to
+# inotify, on Windows to ReadDirectoryChangesW.
+notify = "6"
 
 # Unix-only: SIGTERM/SIGKILL escalation inside SessionManager::kill. Windows
 # gets a different path in a future chunk (v0 scope is macOS + Linux).

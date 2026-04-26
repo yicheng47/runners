@@ -20,6 +20,10 @@ pub struct AppState {
     /// Live per-mission PTY sessions. Created at app start, shared across
     /// all Tauri commands and the reader threads they spawn.
     pub sessions: Arc<session::SessionManager>,
+    /// Live per-mission event-bus watchers. Mounted by `mission_start` once
+    /// the opening events are durable; unmounted by `mission_stop` and on
+    /// any rollback path.
+    pub buses: Arc<event_bus::BusRegistry>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,6 +43,7 @@ pub fn run() {
                 db: pool,
                 app_data_dir,
                 sessions: session::SessionManager::new(),
+                buses: event_bus::BusRegistry::new(),
             });
             Ok(())
         })

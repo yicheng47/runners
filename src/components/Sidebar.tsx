@@ -1,9 +1,9 @@
 // App sidebar — 240px, matches runners-design.pen "Sidebar" frame.
 //
-// Runners itself is omitted from the nav: per docs/impls/v0-mvp.md §C3
-// scope note ("no top-level Runners page in MVP"), runners are crew-scoped
-// only and managed from Crew Detail. Missions stays visible but disabled
-// until C11 lands, so users see the shape the shell is growing into.
+// Order mirrors the design's Sidebar frame (Runner / Crew / Mission). Runner
+// and Mission are placeholders until their pages land — runners get a
+// top-level home with v0.x, missions ship in C11. Showing them disabled now
+// lets users see the shape the shell is growing into without dead links.
 
 import { NavLink } from "react-router-dom";
 
@@ -15,6 +15,7 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
+  { to: "/runners", label: "Runner", enabled: false, hint: "Coming with C8.5" },
   { to: "/crews", label: "Crew", enabled: true },
   { to: "/missions", label: "Mission", enabled: false, hint: "Coming with C11" },
   { to: "/debug", label: "Debug", enabled: true, hint: "C6 PTY scratch page" },
