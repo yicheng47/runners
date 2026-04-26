@@ -64,6 +64,11 @@ pub struct RunnerActivity {
     pub active_missions: i64,
     pub crew_count: i64,
     pub last_started_at: Option<Timestamp>,
+    /// Most recent running direct-chat session for this runner, if any.
+    /// Lets the sidebar's SESSION list re-attach to a live PTY across page
+    /// reloads — without this, the frontend `activeSessions` map starts
+    /// empty on reload and we'd fall back to the runner detail page.
+    pub direct_session_id: Option<String>,
 }
 
 /// Runner row plus its `RunnerActivity`. Returned by `runner_list_with_activity`
@@ -378,6 +383,16 @@ pub fn activity(conn: &Connection, runner_id: &str) -> Result<RunnerActivity> {
             })?),
             None => None,
         };
+    let direct_session_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM sessions
+              WHERE runner_id = ?1 AND status = 'running' AND mission_id IS NULL
+              ORDER BY started_at DESC
+              LIMIT 1",
+            params![runner_id],
+            |r| r.get(0),
+        )
+        .optional()?;
 
     Ok(RunnerActivity {
         runner_id: runner_id.to_string(),
@@ -385,6 +400,7 @@ pub fn activity(conn: &Connection, runner_id: &str) -> Result<RunnerActivity> {
         active_missions,
         crew_count,
         last_started_at,
+        direct_session_id,
     })
 }
 

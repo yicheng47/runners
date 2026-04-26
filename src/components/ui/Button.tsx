@@ -4,17 +4,17 @@ type Variant = "primary" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md";
 
 const base =
-  "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:opacity-50 disabled:pointer-events-none";
+  "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-bg disabled:opacity-50 disabled:pointer-events-none disabled:cursor-not-allowed";
 
 const variants: Record<Variant, string> = {
   primary:
-    "bg-neutral-900 text-white hover:bg-neutral-800 focus-visible:ring-neutral-900",
+    "bg-accent text-accent-ink focus-visible:ring-accent",
   secondary:
-    "bg-white text-neutral-900 border border-neutral-300 hover:bg-neutral-50 focus-visible:ring-neutral-400",
+    "bg-raised text-fg border border-line-strong focus-visible:ring-line-strong",
   ghost:
-    "bg-transparent text-neutral-700 hover:bg-neutral-100 focus-visible:ring-neutral-400",
+    "bg-transparent text-fg-2 focus-visible:ring-line-strong",
   danger:
-    "bg-white text-red-700 border border-red-300 hover:bg-red-50 focus-visible:ring-red-400",
+    "bg-transparent text-danger border border-danger/40 focus-visible:ring-danger",
 };
 
 const sizes: Record<Size, string> = {

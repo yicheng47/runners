@@ -1,6 +1,4 @@
 // Shared shell for Modal (centered) and Drawer (right-edge slide-over).
-// Handles: escape-to-close, backdrop click, body scroll lock, focus trap
-// is intentionally out of scope — lean implementation for the MVP.
 
 import { useEffect, type ReactNode } from "react";
 
@@ -46,19 +44,19 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onMouseDown={onClose}
     >
       <div
-        className={`${widthClass} overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl`}
+        className={`${widthClass} overflow-hidden rounded-lg border border-line-strong bg-panel shadow-2xl`}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="border-b border-neutral-200 px-6 py-4 text-sm font-semibold text-neutral-900">
+        <div className="border-b border-line px-6 py-4 text-sm font-semibold text-fg">
           {title}
         </div>
         <div className="px-6 py-5">{children}</div>
         {footer ? (
-          <div className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-neutral-50 px-6 py-4">
+          <div className="flex items-center justify-end gap-2 border-t border-line bg-bg/40 px-6 py-4">
             {footer}
           </div>
         ) : null}
@@ -87,19 +85,19 @@ export function Drawer({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/35"
+      className="fixed inset-0 z-50 flex justify-end bg-black/60"
       onMouseDown={onClose}
     >
       <div
-        className={`${widthClass} flex h-full flex-col border-l border-neutral-200 bg-white shadow-2xl`}
+        className={`${widthClass} flex h-full flex-col border-l border-line-strong bg-panel shadow-2xl`}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="border-b border-neutral-200 px-6 py-4 text-sm font-semibold text-neutral-900">
+        <div className="border-b border-line px-6 py-4 text-sm font-semibold text-fg">
           {title}
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
         {footer ? (
-          <div className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-neutral-50 px-6 py-4">
+          <div className="flex items-center justify-end gap-2 border-t border-line bg-bg/40 px-6 py-4">
             {footer}
           </div>
         ) : null}

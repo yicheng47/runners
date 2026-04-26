@@ -1,19 +1,17 @@
 // Crews list — matches design/runners-design.pen frame `nqOot`.
 //
-// Vertical stack of crew cards (not a grid) plus a trailing dashed
-// "+ Add another crew" card that doubles as an empty state. Each crew
-// card opens its CrewEditor on click; hovering surfaces an `Edit` affordance
-// on the right alongside the runner count.
+// Vertical stack of dark crew cards. Empty state uses the shared
+// EmptyStateCard so all three list pages stay visually consistent.
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../lib/api";
 import type { CrewListItem } from "../lib/types";
-import { AppShell } from "../components/AppShell";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Overlay";
 import { Field, Input, Textarea } from "../components/ui/Field";
+import { EmptyStateCard } from "../components/EmptyStateCard";
 
 export default function Crews() {
   const [crews, setCrews] = useState<CrewListItem[]>([]);
@@ -41,7 +39,7 @@ export default function Crews() {
   }, [refresh]);
 
   const onDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete crew "${name}"? This removes all its runners.`)) return;
+    if (!confirm(`Delete crew "${name}"? This removes all its slots.`)) return;
     try {
       await api.crew.delete(id);
       await refresh();
@@ -51,15 +49,15 @@ export default function Crews() {
   };
 
   return (
-    <AppShell>
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-4xl flex-col gap-6 px-8 py-8">
+    <>
+      <div className="flex flex-1 flex-col overflow-y-auto">
+        <div className="flex w-full flex-1 flex-col gap-6 px-8 py-8">
           <header className="flex items-center justify-between gap-4">
             <div className="flex flex-col gap-1">
-              <h1 className="text-2xl font-bold tracking-tight text-neutral-900">
+              <h1 className="text-2xl font-bold tracking-tight text-fg">
                 Crews
               </h1>
-              <p className="text-sm text-neutral-500">
+              <p className="text-sm text-fg-2">
                 Named groups of runners with a shared goal.
               </p>
             </div>
@@ -69,19 +67,30 @@ export default function Crews() {
           </header>
 
           {error ? (
-            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
               {error}
             </div>
           ) : null}
 
           {loading ? (
-            <div className="text-sm text-neutral-500">Loading…</div>
+            <div className="text-sm text-fg-2">Loading…</div>
           ) : !loaded ? (
-            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
               Failed to load crews.
             </div>
+          ) : crews.length === 0 ? (
+            <EmptyStateCard
+              icon={<UsersIcon />}
+              title="No crews yet"
+              description="A crew is a named group of runners working a goal together. Spin up your first one to get started."
+              action={
+                <Button variant="primary" onClick={() => setCreating(true)}>
+                  + New crew
+                </Button>
+              }
+            />
           ) : (
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3">
               {crews.map((c) => (
                 <CrewCard
                   key={c.id}
@@ -90,10 +99,6 @@ export default function Crews() {
                   onDelete={() => onDelete(c.id, c.name)}
                 />
               ))}
-              <AddAnotherCard
-                isOnlyCard={crews.length === 0}
-                onClick={() => setCreating(true)}
-              />
             </div>
           )}
         </div>
@@ -108,7 +113,28 @@ export default function Crews() {
           navigate(`/crews/${created.id}`);
         }}
       />
-    </AppShell>
+    </>
+  );
+}
+
+function UsersIcon() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
   );
 }
 
@@ -132,31 +158,30 @@ function CrewCard({
           onOpen();
         }
       }}
-      className="group flex cursor-pointer flex-col gap-3 rounded-lg border border-[#E5E5E5] bg-white p-5 transition-colors hover:border-neutral-300 focus:outline-none focus-visible:border-neutral-400 focus-visible:ring-2 focus-visible:ring-neutral-300"
+      className="group flex cursor-pointer flex-col gap-2 rounded-lg border border-line bg-panel p-4 transition-colors hover:border-line-strong focus:outline-none focus-visible:border-fg-3"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-semibold text-neutral-900">
+          <div className="truncate text-base font-semibold text-fg">
             {item.name}
           </div>
           {item.purpose ? (
-            <div className="mt-0.5 line-clamp-2 text-xs text-neutral-500">
+            <div className="mt-0.5 line-clamp-2 text-xs text-fg-2">
               {item.purpose}
             </div>
           ) : (
-            <div className="mt-0.5 text-xs italic text-neutral-400">
+            <div className="mt-0.5 text-xs italic text-fg-3">
               No purpose set
             </div>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-3 text-xs text-neutral-500">
+        <div className="flex shrink-0 items-center gap-3 text-xs text-fg-2">
           <span>
             {item.runner_count === 1
               ? "1 runner"
               : `${item.runner_count} runners`}
           </span>
-          <span className="text-neutral-300">·</span>
-          <span className="text-[#0066CC] transition-colors hover:underline">
+          <span className="text-accent transition-colors hover:underline">
             Edit
           </span>
           <button
@@ -167,36 +192,13 @@ function CrewCard({
               e.stopPropagation();
               onDelete();
             }}
-            className="rounded px-1 py-0.5 text-xs text-neutral-400 opacity-60 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100"
+            className="rounded px-1 py-0.5 text-fg-3 opacity-60 transition-colors hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
           >
             Delete
           </button>
         </div>
       </div>
     </div>
-  );
-}
-
-function AddAnotherCard({
-  isOnlyCard,
-  onClick,
-}: {
-  isOnlyCard: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-[#D0D0D0] bg-[#FAFAFA] p-5 text-center transition-colors hover:border-neutral-400 hover:bg-white"
-    >
-      <span className="text-sm font-medium text-neutral-600">
-        + {isOnlyCard ? "Create your first crew" : "Add another crew"}
-      </span>
-      <span className="text-xs text-neutral-400">
-        Groups of runners you use together often.
-      </span>
-    </button>
   );
 }
 
@@ -249,7 +251,14 @@ function CreateCrewModal({
     <Modal
       open={open}
       onClose={submitting ? () => {} : onClose}
-      title="New crew"
+      title={
+        <div className="flex flex-col gap-0.5">
+          <span className="text-base font-semibold text-fg">New crew</span>
+          <span className="text-xs font-normal text-fg-3">
+            Group of runners that work missions together.
+          </span>
+        </div>
+      }
       footer={
         <>
           <Button onClick={onClose} disabled={submitting}>
@@ -262,7 +271,7 @@ function CreateCrewModal({
       }
     >
       <form
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
@@ -273,7 +282,7 @@ function CreateCrewModal({
             id="crew-name"
             value={name}
             autoFocus
-            placeholder="e.g. runners-feature"
+            placeholder="runners-feature"
             onChange={(e) => setName(e.target.value)}
           />
         </Field>
@@ -295,7 +304,7 @@ function CreateCrewModal({
             onChange={(e) => setGoal(e.target.value)}
           />
         </Field>
-        {error ? <p className="text-xs text-red-600">{error}</p> : null}
+        {error ? <p className="text-xs text-danger">{error}</p> : null}
       </form>
     </Modal>
   );

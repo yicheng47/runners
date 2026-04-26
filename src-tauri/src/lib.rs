@@ -39,6 +39,23 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir)?;
             let db_path = app_data_dir.join("runner.db");
             let pool = Arc::new(db::open_pool(&db_path)?);
+            // Reconcile orphaned sessions: any row still marked `running`
+            // is from a previous process whose SessionManager died with it,
+            // so the child PTY is gone too. Mark them stopped so the
+            // sidebar's `direct_session_id` query and the chat page agree
+            // with reality. Without this, post-restart clicks land on a
+            // session id the live SessionManager doesn't know about and
+            // every action returns "session not found".
+            {
+                let conn = pool.get()?;
+                conn.execute(
+                    "UPDATE sessions
+                        SET status = 'stopped',
+                            stopped_at = COALESCE(stopped_at, ?1)
+                      WHERE status = 'running'",
+                    rusqlite::params![chrono::Utc::now().to_rfc3339()],
+                )?;
+            }
             app.manage(AppState {
                 db: pool,
                 app_data_dir,
@@ -74,6 +91,7 @@ pub fn run() {
             commands::session::session_list,
             commands::session::session_inject_stdin,
             commands::session::session_kill,
+            commands::session::session_resize,
             commands::session::session_start_direct,
         ])
         .run(tauri::generate_context!())

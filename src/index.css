@@ -1,12 +1,63 @@
 @import "tailwindcss";
 
+/* Carbon & Plasma — dark surfaces, neon-green accent. Mirrors the
+   design system frame `hqxnM` in design/runners-design.pen. Class
+   utilities: `bg-bg`, `bg-panel`, `bg-raised`, `border-line`,
+   `text-fg`, `text-fg-2`, `text-fg-3`, `bg-accent`, `text-accent`. */
+@theme {
+  --color-bg: #0e0e10;
+  --color-panel: #16171b;
+  --color-raised: #1f2127;
+  --color-line: #1f2127;
+  --color-line-strong: #2a2c33;
+
+  --color-fg: #ededf0;
+  --color-fg-2: #9a9ba5;
+  --color-fg-3: #5a5c66;
+
+  --color-accent: #00ff9c;
+  --color-accent-ink: #001f10;
+  --color-warn: #ffb020;
+  --color-danger: #ff4d6d;
+  --color-info: #39e5ff;
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
+  background-color: var(--color-bg);
+  color: var(--color-fg);
 }
 
 [data-tauri-drag-region] {
   cursor: default;
+}
+
+/* Subtle dark scrollbars. macOS shows a permanent track when the user's
+   "Show scrollbars" pref is "Always", which renders as an obvious gray
+   bar against our carbon background. Style it down so scrollable areas
+   don't broadcast themselves. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-line-strong);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-fg-3);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }

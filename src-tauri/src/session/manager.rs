@@ -54,6 +54,10 @@ pub struct RunnerActivityEvent {
     pub active_sessions: i64,
     pub active_missions: i64,
     pub crew_count: i64,
+    /// Most recent running direct-chat session id, if any. Mirrors
+    /// `RunnerActivity::direct_session_id` so the sidebar can re-attach
+    /// to a live PTY without an extra round-trip.
+    pub direct_session_id: Option<String>,
 }
 
 /// Emitter for the real Tauri app — emits `session/output`, `session/exit`,
@@ -341,15 +345,21 @@ impl SessionManager {
         self: &Arc<Self>,
         runner: &Runner,
         cwd: Option<&str>,
+        cols: Option<u16>,
+        rows: Option<u16>,
         app_data_dir: &Path,
         pool: Arc<DbPool>,
         events: Arc<dyn SessionEvents>,
     ) -> Result<SpawnedSession> {
         let pty_system = portable_pty::native_pty_system();
+        // Spawn at the caller's reported xterm grid when known. TUIs like
+        // claude-code lay out their input frame on first paint and don't
+        // gracefully redraw on later SIGWINCH, so booting at the wrong
+        // size leaves a stale 80-col frame stranded in the buffer.
         let pair = pty_system
             .openpty(PtySize {
-                rows: 24,
-                cols: 80,
+                rows: rows.unwrap_or(24),
+                cols: cols.unwrap_or(80),
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -524,6 +534,28 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Resize the session's PTY. Issues the equivalent of an SIGWINCH so
+    /// the child re-renders into the new grid. Frontend calls this after
+    /// xterm fits to the container — without it, claude-code stays at
+    /// the spawn-time 80×24 regardless of how big the visible grid is.
+    pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<()> {
+        let sessions = self.sessions.lock().unwrap();
+        let handle = sessions
+            .get(session_id)
+            .ok_or_else(|| Error::msg(format!("session not found: {session_id}")))?;
+        if let Some(master) = handle.master.as_ref() {
+            master
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| Error::msg(format!("pty resize failed: {e}")))?;
+        }
+        Ok(())
+    }
+
     /// Kill the child and wait for the reader thread to reap it.
     ///
     /// Sequence:
@@ -648,12 +680,23 @@ fn emit_runner_activity(pool: &DbPool, runner: &Runner, events: &dyn SessionEven
             |r| r.get(0),
         )
         .unwrap_or(0);
+    let direct_session_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM sessions
+              WHERE runner_id = ?1 AND status = 'running' AND mission_id IS NULL
+              ORDER BY started_at DESC
+              LIMIT 1",
+            params![runner.id],
+            |r| r.get(0),
+        )
+        .ok();
     events.runner_activity(&RunnerActivityEvent {
         runner_id: runner.id.clone(),
         handle: runner.handle.clone(),
         active_sessions,
         active_missions,
         crew_count,
+        direct_session_id,
     });
 }
 
@@ -1081,6 +1124,8 @@ mod tests {
             .spawn_direct(
                 &runner,
                 Some("/tmp"),
+                None,
+                None,
                 std::path::Path::new("/tmp"),
                 Arc::clone(&pool),
                 cap.clone(),

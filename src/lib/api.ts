@@ -83,7 +83,19 @@ export const api = {
     injectStdin: (sessionId: string, text: string) =>
       invoke<void>("session_inject_stdin", { sessionId, text }),
     kill: (sessionId: string) => invoke<void>("session_kill", { sessionId }),
-    startDirect: (runnerId: string, cwd: string | null) =>
-      invoke<SpawnedSession>("session_start_direct", { runnerId, cwd }),
+    resize: (sessionId: string, cols: number, rows: number) =>
+      invoke<void>("session_resize", { sessionId, cols, rows }),
+    startDirect: (
+      runnerId: string,
+      cwd: string | null,
+      cols: number | null,
+      rows: number | null,
+    ) =>
+      invoke<SpawnedSession>("session_start_direct", {
+        runnerId,
+        cwd,
+        cols,
+        rows,
+      }),
   },
 };

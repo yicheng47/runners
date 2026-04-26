@@ -12,16 +12,16 @@ export function Label({
   return (
     <label
       htmlFor={htmlFor}
-      className="flex items-baseline justify-between text-xs font-medium text-neutral-700"
+      className="flex items-baseline justify-between text-xs font-medium text-fg-2"
     >
       <span>{children}</span>
-      {hint ? <span className="text-neutral-400">{hint}</span> : null}
+      {hint ? <span className="text-fg-3">{hint}</span> : null}
     </label>
   );
 }
 
 const inputBase =
-  "w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-500";
+  "w-full rounded border border-line-strong bg-bg px-2.5 py-1.5 text-sm text-fg placeholder:text-fg-3 focus:outline-none focus:border-fg-3 disabled:opacity-60";
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   const { className = "", ...rest } = props;
@@ -35,7 +35,7 @@ export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 
 export function FieldError({ children }: { children?: ReactNode }) {
   if (!children) return null;
-  return <p className="text-xs text-red-600">{children}</p>;
+  return <p className="text-xs text-danger">{children}</p>;
 }
 
 export function Field({

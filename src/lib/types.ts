@@ -50,6 +50,10 @@ export interface RunnerActivity {
   active_missions: number;
   crew_count: number;
   last_started_at: Timestamp | null;
+  /// Most recent running direct-chat session id for this runner, or null
+  /// if no live direct PTY exists. Lets the sidebar re-attach to a session
+  /// across page reloads without an extra command call.
+  direct_session_id: string | null;
 }
 
 // Runner row plus its RunnerActivity, returned by runner_list_with_activity.
@@ -74,6 +78,7 @@ export interface RunnerActivityEvent {
   active_sessions: number;
   active_missions: number;
   crew_count: number;
+  direct_session_id: string | null;
 }
 
 // Returned by session_start_direct (and by mission_start's session list).

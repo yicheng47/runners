@@ -11,8 +11,8 @@ import type { CrewRunner, Runner, UpdateRunnerInput } from "../lib/types";
 import { Button } from "./ui/Button";
 import { Drawer } from "./ui/Overlay";
 import { Field, Input, Textarea } from "./ui/Field";
-
-const RUNTIMES = ["shell", "claude-code", "codex", "aider"] as const;
+import { RuntimeSelect } from "./ui/RuntimeSelect";
+import { RUNTIME_OPTIONS } from "./ui/runtimes";
 
 // Accept either a global Runner (from the Runners page in C5.5b) or a
 // CrewRunner (slot inside a crew) — the extra `lead` / `position` fields
@@ -30,7 +30,7 @@ export function RunnerEditDrawer({
 }) {
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState("");
-  const [runtime, setRuntime] = useState("shell");
+  const [runtime, setRuntime] = useState<string>(RUNTIME_OPTIONS[0].value);
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
   const [workingDir, setWorkingDir] = useState("");
@@ -89,11 +89,11 @@ export function RunnerEditDrawer({
         runner ? (
           <span className="flex items-center gap-2">
             Edit runner
-            <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-xs font-normal text-neutral-600">
+            <span className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs font-normal text-fg-2">
               @{runner.handle}
             </span>
             {"lead" in runner && runner.lead ? (
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+              <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
                 Lead
               </span>
             ) : null}
@@ -137,18 +137,16 @@ export function RunnerEditDrawer({
         </Field>
 
         <Field id="edit-runtime" label="Runtime">
-          <select
+          <RuntimeSelect
             id="edit-runtime"
             value={runtime}
-            onChange={(e) => setRuntime(e.target.value)}
-            className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-400"
-          >
-            {RUNTIMES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
+            onChange={(opt) => {
+              setRuntime(opt.value);
+              // Edit drawer keeps the existing command — picking a
+              // runtime here just changes the runtime tag, not the
+              // user's already-tweaked binary path.
+            }}
+          />
         </Field>
 
         <Field id="edit-command" label="Command">
@@ -192,7 +190,7 @@ export function RunnerEditDrawer({
           />
         </Field>
 
-        {error ? <p className="text-xs text-red-600">{error}</p> : null}
+        {error ? <p className="text-xs text-danger">{error}</p> : null}
       </form>
     </Drawer>
   );

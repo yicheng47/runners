@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS dock icon. Mirrors quill's pattern of leaving an Apple
+       safe-area inset so the visible rounded square (824×824) lines up
+       with stock macOS app icons (Safari, Mail, etc.) instead of
+       bleeding to the full 1024 canvas.
+
+       Apple BigSur+ template: 824×824 visible body centered on a
+       1024×1024 canvas (≈100px transparent margin per side), corner
+       radius ≈185 on the body.
+
+       The three-chevron mark inside is the same geometry as
+       src/components/Sidebar.tsx's BrandMark (frame `88D24` in
+       design/runners-design.pen), uniformly scaled and translated by
+       the safe-area inset via the wrapping <g>. -->
+
+  <!-- Canvas left transparent — only the inner rounded square draws.
+       Without this, macOS would render our icon slightly larger than
+       sibling apps because every other app respects the safe area. -->
+
+  <g transform="translate(100, 100) scale(0.8047)">
+    <!-- Body — Carbon background. -->
+    <rect width="1024" height="1024" rx="230" ry="230" fill="#0E0E10"/>
+
+    <!-- Top-left ghost chevron (40% accent). -->
+    <svg x="96" y="96" width="288" height="288" viewBox="0 0 24 24">
+      <polyline points="9 18 15 12 9 6"
+                fill="none"
+                stroke="#00FF9C"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                opacity="0.4"/>
+    </svg>
+
+    <!-- Main chevron. -->
+    <svg x="288" y="288" width="448" height="448" viewBox="0 0 24 24">
+      <polyline points="9 18 15 12 9 6"
+                fill="none"
+                stroke="#00FF9C"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"/>
+    </svg>
+
+    <!-- Bottom-left ghost chevron (40% accent). -->
+    <svg x="96" y="640" width="288" height="288" viewBox="0 0 24 24">
+      <polyline points="9 18 15 12 9 6"
+                fill="none"
+                stroke="#00FF9C"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                opacity="0.4"/>
+    </svg>
+  </g>
+</svg>

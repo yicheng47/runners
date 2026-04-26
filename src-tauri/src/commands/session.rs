@@ -110,6 +110,16 @@ pub async fn session_kill(state: State<'_, AppState>, session_id: String) -> Res
     state.sessions.kill(&session_id)
 }
 
+#[tauri::command]
+pub async fn session_resize(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    state.sessions.resize(&session_id, cols, rows)
+}
+
 /// Spawn a "direct chat" session for a runner — a PTY with no parent
 /// mission, no orchestrator, no event log (C8.5). Used by the Runner
 /// Detail page's "Chat now" button: the user picks a working directory
@@ -125,6 +135,8 @@ pub async fn session_start_direct(
     app: tauri::AppHandle,
     runner_id: String,
     cwd: Option<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<SpawnedSession> {
     // Look up the runner under a short-lived connection so we don't hold
     // a pool slot across the spawn (which itself grabs a connection to
@@ -139,6 +151,8 @@ pub async fn session_start_direct(
         .spawn_direct(
             &runner,
             cwd.as_deref(),
+            cols,
+            rows,
             &state.app_data_dir,
             state.db.clone(),
             emitter,

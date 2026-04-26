@@ -17,11 +17,9 @@ import type { CreateRunnerInput } from "../lib/types";
 import { Button } from "./ui/Button";
 import { Modal } from "./ui/Overlay";
 import { Field, Input, Textarea } from "./ui/Field";
+import { RuntimeSelect } from "./ui/RuntimeSelect";
+import { RUNTIME_OPTIONS } from "./ui/runtimes";
 
-const RUNTIMES = ["shell", "claude-code", "codex", "aider"] as const;
-
-// Mirrors src-tauri/src/commands/runner.rs::validate_handle. Kept in sync
-// for instant UX feedback; the backend is the source of truth.
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 export function AddSlotModal({
@@ -40,8 +38,8 @@ export function AddSlotModal({
   const [handle, setHandle] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState("");
-  const [runtime, setRuntime] = useState<string>("shell");
-  const [command, setCommand] = useState("");
+  const [runtime, setRuntime] = useState<string>(RUNTIME_OPTIONS[0].value);
+  const [command, setCommand] = useState(RUNTIME_OPTIONS[0].defaultCommand);
   const [argsText, setArgsText] = useState("");
   const [workingDir, setWorkingDir] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -53,8 +51,8 @@ export function AddSlotModal({
       setHandle("");
       setDisplayName("");
       setRole("");
-      setRuntime("shell");
-      setCommand("");
+      setRuntime(RUNTIME_OPTIONS[0].value);
+      setCommand(RUNTIME_OPTIONS[0].defaultCommand);
       setArgsText("");
       setWorkingDir("");
       setSystemPrompt("");
@@ -93,12 +91,8 @@ export function AddSlotModal({
     };
     let createdRunnerId: string | null = null;
     try {
-      // Step 1: create the global runner.
       const runner = await api.runner.create(input);
       createdRunnerId = runner.id;
-      // Step 2: attach it to this crew as a slot. If this fails (e.g. the
-      // crew was deleted mid-flight), roll back the runner so we don't
-      // leave orphans in the global list.
       await api.crew.addRunner(crewId, runner.id);
       await onCreated();
     } catch (e) {
@@ -107,7 +101,7 @@ export function AddSlotModal({
         try {
           await api.runner.delete(createdRunnerId);
         } catch {
-          // Best-effort cleanup — surface the original error to the user.
+          // best-effort cleanup
         }
       }
     } finally {
@@ -121,10 +115,8 @@ export function AddSlotModal({
       onClose={submitting ? () => {} : onClose}
       title={
         <div className="flex flex-col gap-0.5">
-          <span className="text-base font-semibold text-neutral-900">
-            Add slot
-          </span>
-          <span className="text-xs font-normal text-neutral-500">
+          <span className="text-base font-semibold text-fg">Add slot</span>
+          <span className="text-xs font-normal text-fg-3">
             {isFirstRunner
               ? "First slot in the crew — it becomes the LEAD automatically."
               : "Adds a new runner to this crew."}
@@ -150,75 +142,62 @@ export function AddSlotModal({
           void submit();
         }}
       >
+        <Field
+          id="runner-handle"
+          label="Handle"
+          hint="lowercase, immutable"
+          error={handleError}
+        >
+          <div className="flex items-center rounded border border-line-strong bg-bg px-2.5 py-1.5 text-sm focus-within:border-fg-3">
+            <span className="select-none pr-1 font-mono font-semibold text-fg-3">
+              @
+            </span>
+            <input
+              id="runner-handle"
+              autoFocus
+              value={handle}
+              placeholder="reviewer"
+              onChange={(e) => setHandle(e.target.value.toLowerCase())}
+              className="flex-1 bg-transparent font-mono text-fg outline-none placeholder:text-fg-3"
+            />
+          </div>
+        </Field>
+
         <div className="grid grid-cols-2 gap-3">
-          <Field
-            id="runner-handle"
-            label="Handle"
-            hint="immutable"
-            error={handleError}
-          >
-            <div className="flex items-center rounded-md border border-neutral-300 bg-neutral-50 px-2.5 py-1.5 text-sm focus-within:border-neutral-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-neutral-300">
-              <span className="select-none pr-1 font-mono font-semibold text-neutral-400">
-                @
-              </span>
-              <input
-                id="runner-handle"
-                autoFocus
-                value={handle}
-                placeholder="reviewer"
-                onChange={(e) => setHandle(e.target.value.toLowerCase())}
-                className="flex-1 bg-transparent font-mono text-neutral-900 outline-none placeholder:text-neutral-400"
-              />
-            </div>
-            <p className="text-[11px] text-neutral-500">
-              Lowercase slug, unique in this crew. Immutable once used in a
-              mission.
-            </p>
-          </Field>
           <Field id="runner-display-name" label="Display name">
             <Input
               id="runner-display-name"
               value={displayName}
-              placeholder="e.g. Implementer"
+              placeholder="Implementer"
               onChange={(e) => setDisplayName(e.target.value)}
             />
           </Field>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
           <Field id="runner-role" label="Role">
             <Input
               id="runner-role"
               value={role}
-              placeholder="e.g. impl, reviewer, architect"
+              placeholder="impl, reviewer, architect"
               onChange={(e) => setRole(e.target.value)}
             />
           </Field>
-          <Field id="runner-runtime" label="Runtime">
-            <select
-              id="runner-runtime"
-              value={runtime}
-              onChange={(e) => setRuntime(e.target.value)}
-              className="w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-400"
-            >
-              {RUNTIMES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </Field>
         </div>
 
-        <Field
-          id="runner-command"
-          label="Command"
-          hint="the binary to spawn"
-        >
+        <Field id="runner-runtime" label="Runtime">
+          <RuntimeSelect
+            id="runner-runtime"
+            value={runtime}
+            onChange={(opt) => {
+              setRuntime(opt.value);
+              setCommand(opt.defaultCommand);
+            }}
+          />
+        </Field>
+
+        <Field id="runner-command" label="Command" hint="the binary to spawn">
           <Input
             id="runner-command"
             value={command}
-            placeholder="e.g. claude, codex, sh"
+            placeholder="claude, codex, sh"
             onChange={(e) => setCommand(e.target.value)}
           />
         </Field>
@@ -227,7 +206,7 @@ export function AddSlotModal({
           <Input
             id="runner-args"
             value={argsText}
-            placeholder="e.g. --dangerously-skip-permissions"
+            placeholder="--dangerously-skip-permissions"
             onChange={(e) => setArgsText(e.target.value)}
           />
         </Field>
@@ -259,7 +238,7 @@ export function AddSlotModal({
           />
         </Field>
 
-        {error ? <p className="text-xs text-red-600">{error}</p> : null}
+        {error ? <p className="text-xs text-danger">{error}</p> : null}
       </form>
     </Modal>
   );

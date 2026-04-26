@@ -1,13 +1,8 @@
 // Crew detail — matches design/runners-design.pen frame `CUKjM`.
 //
-// Layout:
-//   - top toolbar (`tb_cd`): back to Crews + inline name field + Save +
-//     Start mission. Start mission is disabled in C3 — it belongs to C11.
-//   - content: Purpose section + Slots section with numbered draggable rows.
-//
-// Template palette is intentionally omitted: MVP has no runner-template
-// concept (PRD §3 — runners are crew-scoped), so the palette has nothing
-// to list. Add Slot goes straight to the modal instead.
+// Layout: top toolbar (back to Crews + inline name field + Save + Start
+// mission) above a two-section body (Purpose, Slots). Start mission is
+// disabled in C3 — it belongs to C11.
 
 import {
   useCallback,
@@ -21,7 +16,6 @@ import { Link, useParams } from "react-router-dom";
 
 import { api } from "../lib/api";
 import type { Crew, CrewRunner } from "../lib/types";
-import { AppShell } from "../components/AppShell";
 import { AddSlotModal } from "../components/AddSlotModal";
 import { RunnerEditDrawer } from "../components/RunnerEditDrawer";
 import { Button } from "../components/ui/Button";
@@ -88,9 +82,6 @@ export default function CrewEditor() {
     }
   };
 
-  // "Remove from crew" vs. "Delete runner entirely" are two different ops
-  // in C5.5. A crew slot is just a membership row — taking it out of a
-  // crew doesn't delete the runner. The runners page owns global delete.
   const onRemoveFromCrew = async (r: CrewRunner) => {
     if (!crewId) return;
     const tail = r.lead
@@ -127,30 +118,23 @@ export default function CrewEditor() {
   };
 
   if (!crewId) {
-    return (
-      <AppShell>
-        <div className="p-8 text-sm text-red-700">Missing crew id.</div>
-      </AppShell>
-    );
+    return <div className="p-8 text-sm text-danger">Missing crew id.</div>;
   }
 
-  const nameDirty = crew !== null && nameDraft.trim() !== crew.name && nameDraft.trim().length > 0;
+  const nameDirty =
+    crew !== null && nameDraft.trim() !== crew.name && nameDraft.trim().length > 0;
 
   return (
-    <AppShell>
-      {/* Top toolbar — `pt-9` (36px) reserves the macOS title-bar /
-          drag-region row at the top so the AppShell strip doesn't overlay
-          our controls (the strip is z-10 above this toolbar; controls
-          inside `pt-9` start at y≈36, well below the strip's y=28). */}
-      <div className="flex items-center justify-between gap-4 border-b border-[#E5E5E5] bg-white px-8 pb-4 pt-9">
+    <>
+      <div className="flex items-center justify-between gap-4 border-b border-line bg-panel px-8 pb-4 pt-9">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <Link
             to="/crews"
-            className="shrink-0 text-sm text-neutral-500 transition-colors hover:text-neutral-800"
+            className="shrink-0 text-sm text-fg-2 transition-colors hover:text-fg"
           >
-            ← Crews
+            ‹ Crews
           </Link>
-          <span className="text-neutral-300">/</span>
+          <span className="text-line-strong">›</span>
           {crew ? (
             <input
               value={nameDraft}
@@ -165,10 +149,10 @@ export default function CrewEditor() {
                   (e.target as HTMLInputElement).blur();
                 }
               }}
-              className="min-w-0 max-w-sm rounded-md border border-[#E5E5E5] bg-[#FAFAFA] px-2.5 py-1.5 text-sm font-semibold text-neutral-900 focus:border-neutral-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-neutral-300"
+              className="min-w-0 max-w-sm rounded border border-line bg-bg px-2.5 py-1.5 text-sm font-semibold text-fg focus:border-fg-3 focus:outline-none"
             />
           ) : (
-            <span className="text-sm text-neutral-400">…</span>
+            <span className="text-sm text-fg-3">…</span>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -179,62 +163,50 @@ export default function CrewEditor() {
           >
             {savingName ? "Saving…" : "Save"}
           </Button>
-          <Button
-            variant="primary"
-            disabled
-            title="Start Mission arrives in C11"
-          >
+          <Button variant="primary" disabled title="Start Mission arrives in C11">
             Start mission
           </Button>
         </div>
       </div>
 
-      {/* Body */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="p-8 text-sm text-neutral-500">Loading…</div>
+          <div className="p-8 text-sm text-fg-2">Loading…</div>
         ) : !loaded ? (
-          <div className="m-8 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="m-8 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             {error ?? "Failed to load crew."}
           </div>
         ) : crew === null ? (
-          <div className="p-8 text-sm text-red-700">Crew not found.</div>
+          <div className="p-8 text-sm text-danger">Crew not found.</div>
         ) : (
           <div className="mx-auto flex max-w-4xl flex-col gap-8 px-8 py-8">
             {error ? (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
                 {error}
               </div>
             ) : null}
 
-            {/* Purpose */}
             <section className="flex flex-col gap-1.5">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-fg-3">
                 Purpose
               </div>
               {crew.purpose ? (
-                <p className="text-sm text-neutral-700">{crew.purpose}</p>
+                <p className="text-sm text-fg">{crew.purpose}</p>
               ) : (
-                <p className="text-sm italic text-neutral-400">
-                  No purpose set.
-                </p>
+                <p className="text-sm italic text-fg-3">No purpose set.</p>
               )}
             </section>
 
-            {/* Slots */}
             <section className="flex flex-col gap-4">
               <div className="flex items-end justify-between gap-4">
                 <div className="flex flex-col gap-0.5">
-                  <h2 className="text-xl font-bold text-neutral-900">Slots</h2>
-                  <p className="text-xs text-neutral-500">
-                    Positions in the crew. Each slot binds a handle to a
-                    runner.
-                  </p>
-                  <p className="text-xs text-neutral-500">
+                  <h2 className="text-xl font-bold text-fg">Slots</h2>
+                  <p className="text-xs text-fg-2">
+                    Positions in the crew. Each slot binds a handle to a runner.
                     The{" "}
-                    <span className="font-semibold text-amber-800">LEAD</span>{" "}
-                    is the crew's face — receives human messages by default
-                    and dispatches to other slots.
+                    <span className="font-semibold text-accent">LEAD</span> is the
+                    crew's face — receives human messages by default and dispatches
+                    back to other slots.
                   </p>
                 </div>
                 <Button variant="primary" onClick={() => setAdding(true)}>
@@ -275,7 +247,7 @@ export default function CrewEditor() {
           await refresh();
         }}
       />
-    </AppShell>
+    </>
   );
 }
 
@@ -296,17 +268,17 @@ function RunnerList({
 }) {
   if (runners.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-[#D0D0D0] bg-[#FAFAFA] px-5 py-8 text-center">
-        <p className="text-sm text-neutral-600">No slots yet.</p>
-        <p className="mt-1 text-[11px] text-neutral-500">
-          Use <span className="font-medium">+ Add slot</span> above — the first
-          runner auto-assigns as LEAD.
+      <div className="rounded-lg border border-dashed border-line-strong bg-panel/40 px-5 py-8 text-center">
+        <p className="text-sm text-fg">No slots yet.</p>
+        <p className="mt-1 text-xs text-fg-3">
+          Use <span className="font-medium text-fg">+ Add slot</span> above —
+          the first runner auto-assigns as LEAD.
         </p>
       </div>
     );
   }
   return (
-    <ol className="flex flex-col gap-3">
+    <ol className="flex flex-col gap-2">
       {runners.map((r, i) => (
         <RunnerRow
           key={r.id}
@@ -388,44 +360,45 @@ function RunnerRow({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={`group flex items-center gap-4 rounded-lg border bg-white p-4 transition-colors ${
+      className={`group flex items-center gap-4 rounded-lg border bg-panel p-4 transition-colors ${
         dragOver
-          ? "border-neutral-500 bg-neutral-50"
-          : "border-[#E5E5E5] hover:border-neutral-300"
+          ? "border-accent/50 bg-accent/5"
+          : "border-line hover:border-line-strong"
       }`}
     >
       <div
-        className={`flex shrink-0 select-none items-center text-[14px] leading-none text-neutral-300 ${
+        className={`flex shrink-0 select-none items-center text-[14px] leading-none text-fg-3 ${
           draggable ? "cursor-grab" : "opacity-40"
         }`}
         title={draggable ? "Drag to reorder" : undefined}
       >
         ⋮⋮
       </div>
-      <div className="w-4 shrink-0 text-center text-xs font-semibold text-neutral-400">
-        {index + 1}
-      </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[13px] font-medium text-neutral-900">
+          <span className="font-mono text-[13px] font-medium text-fg">
             @{runner.handle}
           </span>
-          <span className="text-xs text-neutral-500">{runner.display_name}</span>
           {runner.lead ? (
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
               Lead
             </span>
           ) : null}
-          <span className="rounded bg-[#F2F2F2] px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
-            {runner.role}
-          </span>
-          <span className="rounded bg-[#F2F2F2] px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">
+          <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] font-medium text-fg-2">
             {runner.runtime}
           </span>
+          {runner.role ? (
+            <span className="text-xs text-fg-2">{runner.role}</span>
+          ) : null}
         </div>
+        {runner.system_prompt ? (
+          <div className="mt-1 line-clamp-1 text-xs text-fg-2">
+            {runner.system_prompt}
+          </div>
+        ) : null}
         {summary ? (
-          <div className="mt-1 truncate font-mono text-[11px] text-neutral-500">
+          <div className="mt-1 truncate font-mono text-[11px] text-fg-3">
             $ {summary}
           </div>
         ) : null}
@@ -433,17 +406,14 @@ function RunnerRow({
 
       <div className="flex shrink-0 items-center gap-3 text-xs opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
         {runner.lead ? (
-          <span
-            title="Already the crew's lead"
-            className="text-neutral-400"
-          >
+          <span title="Already the crew's lead" className="text-fg-3">
             Lead
           </span>
         ) : (
           <button
             type="button"
             onClick={onSetLead}
-            className="text-neutral-500 transition-colors hover:text-neutral-900"
+            className="text-fg-2 transition-colors hover:text-fg"
           >
             Set as lead
           </button>
@@ -451,14 +421,14 @@ function RunnerRow({
         <button
           type="button"
           onClick={onEdit}
-          className="text-[#0066CC] transition-colors hover:underline"
+          className="text-accent transition-colors hover:underline"
         >
-          Edit
+          Prompt
         </button>
         <button
           type="button"
           onClick={onRemove}
-          className="text-[#B91C1C] transition-colors hover:underline"
+          className="text-danger transition-colors hover:underline"
         >
           Remove
         </button>
