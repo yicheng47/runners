@@ -117,6 +117,12 @@ export default function Runners() {
             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               Failed to load runners.
             </div>
+          ) : runners.length === 0 ? (
+            <div className="rounded-md border border-[#E5E5E5] bg-white px-4 py-6 text-center text-sm text-neutral-500">
+              No runners yet. Use{" "}
+              <span className="font-medium text-neutral-700">+ New runner</span>{" "}
+              above to create one.
+            </div>
           ) : (
             <div className="flex flex-col gap-4">
               {runners.map((r) => (
@@ -127,10 +133,6 @@ export default function Runners() {
                   onDelete={() => onDelete(r.id, r.handle)}
                 />
               ))}
-              <AddAnotherCard
-                isOnlyCard={runners.length === 0}
-                onClick={() => setCreating(true)}
-              />
             </div>
           )}
         </div>
@@ -230,25 +232,3 @@ function RunnerCard({
   );
 }
 
-function AddAnotherCard({
-  isOnlyCard,
-  onClick,
-}: {
-  isOnlyCard: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-[#D0D0D0] bg-[#FAFAFA] p-5 text-center transition-colors hover:border-neutral-400 hover:bg-white"
-    >
-      <span className="text-sm font-medium text-neutral-600">
-        + {isOnlyCard ? "Create your first runner" : "Add another runner"}
-      </span>
-      <span className="text-xs text-neutral-400">
-        Reusable across crews. The same handle anywhere = the same runner.
-      </span>
-    </button>
-  );
-}
