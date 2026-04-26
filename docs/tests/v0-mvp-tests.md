@@ -333,7 +333,7 @@ Expected: positions persist (refresh to confirm); `LEAD` badge still attached to
 ### Known gaps — do NOT verify in C3
 
 - Per-slot system-prompt override: UI field exists but is a stub until v0.x — typing stores the value but it has no effect at runtime.
-- Standalone Runners list / Runner Detail pages: not built in MVP.
+- Standalone Runners list / Runner Detail pages: built in **C8.5**, not C3. Verify under that chunk's manual-test plan.
 - Mission workspace behavior: C10.
 - Start Mission: C11.
 

@@ -97,10 +97,10 @@ If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
 - A crew has: `name`, `goal` (default mission brief), list of runners, orchestrator policy, signal-type allowlist.
 - Persisted in SQLite.
 
-### 6.2 Runner CRUD (scoped to a crew)
-- Spawn, edit, remove runners within a crew.
+### 6.2 Runner CRUD (top-level, shared across crews)
+- Create, edit, delete runners as standalone config; add or remove a runner's membership in a given crew via `crew_runners`. The same runner can sit in multiple crews simultaneously (post-C5.5a).
 - A runner has:
-  - `handle` — lowercase slug (e.g. `coder`). Immutable once set; unique within the crew. Used everywhere addressing is needed (`from`/`to` in events, `--to <handle>` on the CLI, policy rules).
+  - `handle` — lowercase slug (e.g. `coder`). Immutable once set; **globally unique** across the app. Used everywhere addressing is needed (`from`/`to` in events, `--to <handle>` on the CLI, policy rules) so `@coder` names the same runner everywhere it appears.
   - `display_name` — free-form UI label (e.g. "Coder", "Lead Reviewer"). Editable; presentation-only.
   - `role` — short label, e.g. "implementation".
   - `runtime` — enum: `claude-code | codex | shell`. Adds the right default `command` + `args`.

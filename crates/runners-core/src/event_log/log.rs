@@ -230,11 +230,17 @@ impl EventLog {
         let mut out = Vec::new();
         let mut skipped = Vec::new();
         let mut pos = offset;
-        let mut buf = String::new();
+        let mut buf: Vec<u8> = Vec::new();
         loop {
             let line_start = pos;
             buf.clear();
-            let n = reader.read_line(&mut buf)?;
+            // Use byte-level reads. `read_line` would Err on the first
+            // non-UTF-8 byte and that error would propagate out of `tick`,
+            // freezing the bus on the same offset forever. NDJSON expects
+            // UTF-8, but a buggy writer that emits raw bytes must surface
+            // as a SkipReport — not as a poison pill that hides every
+            // event after it.
+            let n = reader.read_until(b'\n', &mut buf)?;
             if n == 0 {
                 break;
             }
@@ -242,14 +248,20 @@ impl EventLog {
             // A line without a trailing '\n' is incomplete (writer crashed
             // or torn write). Don't advance past it — the next tick should
             // re-attempt once the writer finishes the line.
-            if !buf.ends_with('\n') {
+            if buf.last() != Some(&b'\n') {
                 break;
             }
-            let trimmed = buf.trim_end_matches(['\n', '\r']);
-            if trimmed.is_empty() {
+            // Trim the terminator (and an optional preceding '\r') without
+            // requiring valid UTF-8.
+            let mut end = buf.len() - 1;
+            if end > 0 && buf[end - 1] == b'\r' {
+                end -= 1;
+            }
+            let line = &buf[..end];
+            if line.is_empty() {
                 continue;
             }
-            match serde_json::from_str::<Event>(trimmed) {
+            match serde_json::from_slice::<Event>(line) {
                 Ok(event) => out.push(LogEntry {
                     next_offset: pos,
                     event,
@@ -620,6 +632,37 @@ mod tests {
             "next id {} not > prior valid id {}",
             next.id,
             committed
+        );
+    }
+
+    #[test]
+    fn read_from_lossy_skips_non_utf8_lines_too() {
+        // Regression: `read_line` requires UTF-8 and Errs out on the first
+        // non-UTF-8 line, which would propagate up through the bus's tick
+        // and freeze the offset. `read_until` with byte-level parsing
+        // demotes that to a SkipReport.
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let log = EventLog::open(dir.path()).unwrap();
+        let good_a = log.append(draft_signal("ask_lead")).unwrap();
+        // Hand-write a complete-but-invalid-UTF-8 line directly.
+        {
+            let mut f = OpenOptions::new()
+                .append(true)
+                .open(dir.path().join(EVENTS_FILENAME))
+                .unwrap();
+            f.write_all(b"\xff\xfe garbage\n").unwrap();
+        }
+        let good_b = log.append(draft_signal("ask_lead")).unwrap();
+
+        let (entries, skipped) = log.read_from_lossy(0).unwrap();
+        assert_eq!(entries.len(), 2, "both good events surface");
+        assert_eq!(entries[0].event.id, good_a.id);
+        assert_eq!(entries[1].event.id, good_b.id);
+        assert_eq!(skipped.len(), 1, "exactly one skip report");
+        assert!(
+            skipped[0].next_offset > skipped[0].offset,
+            "skip must advance past the bad bytes"
         );
     }
 
