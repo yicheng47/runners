@@ -341,6 +341,7 @@ impl SessionManager {
     ///   - The session does not show up in `kill_all_for_mission` for any
     ///     mission_id, so a `mission_stop` on some unrelated crew never
     ///     yanks the user's open chat.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_direct(
         self: &Arc<Self>,
         runner: &Runner,
