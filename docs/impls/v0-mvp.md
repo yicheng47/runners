@@ -116,7 +116,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 **Manual test plan.** Create a crew, add two runners, reassign lead, delete lead, confirm auto-promotion to the next runner by `position`.
 
-**Out of scope.** Mission workspace, Start Mission modal. Standalone Runners list/detail pages (design exists, MVP does not build them).
+**Out of scope.** Mission workspace, Start Mission modal. The standalone Runners list / Runner Detail pages (frames `2Oecf` and `ocAFJ` in the design) ship in **C8.5**, not C3.
 
 ---
 

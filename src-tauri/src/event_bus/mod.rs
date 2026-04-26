@@ -367,6 +367,18 @@ impl BusState {
             // only authorized writer of these and it always sets up_to.
             return;
         };
+        // Reject up_to values that aren't real ULIDs. Without this guard a
+        // junk value like "zzzz" sorts after every real ULID lexically, so
+        // the comparisons below would silently mark every existing inbox
+        // entry as read and hide every future entry whose ULID came before
+        // "zzzz" — which, given Crockford's alphabet, is all of them.
+        if up_to.parse::<ulid::Ulid>().is_err() {
+            eprintln!(
+                "event_bus[{}]: dropping inbox_read with non-ULID up_to {:?}",
+                self.mission_id, up_to
+            );
+            return;
+        }
         let handle = event.from.clone();
         let inbox = self.inbox.entry(handle.clone()).or_default();
 
@@ -810,6 +822,43 @@ mod tests {
             2,
             "broadcast message should inbox for both lead and coder"
         );
+    }
+
+    #[test]
+    fn inbox_read_with_non_ulid_up_to_is_dropped() {
+        // Regression: a junk `up_to` like "zzzz" sorts past every real
+        // ULID lexically; without ULID validation, the bus would mark
+        // every existing inbox entry as read and hide every future one.
+        // The signal must be silently dropped so the watermark stays put.
+        let dir = fresh_mission_dir();
+        let log = EventLog::open(dir.path()).unwrap();
+        log.append(message("lead", None, "real broadcast")).unwrap();
+        log.append(signal(
+            "lead",
+            "inbox_read",
+            serde_json::json!({ "up_to": "zzzz" }),
+        ))
+        .unwrap();
+
+        let cap = Arc::new(Capture::default());
+        let _bus = EventBus::for_mission(
+            "mission".into(),
+            dir.path(),
+            &["lead".to_string()],
+            cap_dyn(&cap),
+        )
+        .unwrap();
+
+        wait_until(1000, || cap.appended.lock().unwrap().len() == 2);
+        // The bad inbox_read must not produce a watermark advance.
+        let wm = cap.watermark.lock().unwrap();
+        assert!(
+            wm.is_empty(),
+            "junk up_to must not advance the watermark; got {wm:?}"
+        );
+        // The real broadcast still got inboxed; unread_count should be 1.
+        let inbox = cap.inbox.lock().unwrap();
+        assert_eq!(inbox.last().unwrap().unread_count, 1);
     }
 
     #[test]

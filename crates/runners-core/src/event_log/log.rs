@@ -262,10 +262,27 @@ impl EventLog {
                 continue;
             }
             match serde_json::from_slice::<Event>(line) {
-                Ok(event) => out.push(LogEntry {
-                    next_offset: pos,
-                    event,
-                }),
+                Ok(event) => {
+                    // Validate the id is a real ULID — `Event.id` is just a
+                    // String at the type level, so serde will happily accept
+                    // `"id":"zzzz"`. Letting it through would corrupt the
+                    // bus's lex-sorted inbox state: a junk id like "zzzz"
+                    // sorts after every real ULID, so a later legitimate
+                    // event would silently look "older" and get treated as
+                    // already-read by `up_to` watermarks.
+                    if event.id.parse::<ulid::Ulid>().is_err() {
+                        skipped.push(SkipReport {
+                            offset: line_start,
+                            next_offset: pos,
+                            error: format!("event id {:?} is not a valid ULID", event.id),
+                        });
+                        continue;
+                    }
+                    out.push(LogEntry {
+                        next_offset: pos,
+                        event,
+                    });
+                }
                 Err(e) => {
                     skipped.push(SkipReport {
                         offset: line_start,
@@ -632,6 +649,44 @@ mod tests {
             "next id {} not > prior valid id {}",
             next.id,
             committed
+        );
+    }
+
+    #[test]
+    fn read_from_lossy_skips_lines_whose_id_is_not_a_ulid() {
+        // Regression: `Event.id` is just a `String` at the type level, so
+        // serde happily accepts `"id":"zzzz"`. The bus stores ids in a
+        // lex-sorted projection — a junk id like "zzzz" sorts past every
+        // real ULID and would make later legitimate events look already-
+        // read. Demote to SkipReport so this never reaches the bus.
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let log = EventLog::open(dir.path()).unwrap();
+        let good_a = log.append(draft_signal("ask_lead")).unwrap();
+        // Hand-write a complete JSON line whose id field is the wrong shape.
+        {
+            let mut f = OpenOptions::new()
+                .append(true)
+                .open(dir.path().join(EVENTS_FILENAME))
+                .unwrap();
+            f.write_all(
+                b"{\"id\":\"zzzz\",\"ts\":\"2026-04-26T00:00:00Z\",\"crew_id\":\"c\",\
+                  \"mission_id\":\"m\",\"kind\":\"signal\",\"from\":\"x\",\"to\":null,\
+                  \"type\":\"ask_lead\",\"payload\":{}}\n",
+            )
+            .unwrap();
+        }
+        let good_b = log.append(draft_signal("ask_lead")).unwrap();
+
+        let (entries, skipped) = log.read_from_lossy(0).unwrap();
+        assert_eq!(entries.len(), 2, "two valid events must come through");
+        assert_eq!(entries[0].event.id, good_a.id);
+        assert_eq!(entries[1].event.id, good_b.id);
+        assert_eq!(skipped.len(), 1, "the malformed-id line must be a skip");
+        assert!(
+            skipped[0].error.contains("not a valid ULID"),
+            "skip should explain why; got {:?}",
+            skipped[0].error
         );
     }
 
