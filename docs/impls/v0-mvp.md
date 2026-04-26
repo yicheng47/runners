@@ -319,6 +319,12 @@ Areas: `db`, `commands`, `ui`, `event-log`, `session`, `event-bus`, `orchestrato
 
 ## Branching
 
-- Feature branch: `feature/v0-mvp`, branched from `main`.
-- Each chunk PR targets `feature/v0-mvp`, merged with `--squash --delete-branch`.
-- Once C11 lands and the demo path passes, `feature/v0-mvp` squash-merges to `main` with a summary commit message.
+- Each chunk lives on its own branch off `main` (e.g. `feat/c8-orchestrator-v0`).
+- Chunk PRs target `main` directly, merged with `--squash --delete-branch`.
+- The original plan stacked chunks on a `feature/v0-mvp` umbrella branch
+  that batched-merged into `main` once C11 landed. That added a layer of
+  ceremony without buying anything: chunks already ship in
+  feature-flagged-by-absence increments (an unfinished orchestrator just
+  means the relevant signals don't get routed yet) and the umbrella was
+  one extra rebase target. Dropped after C8.5; stale references to
+  `feature/v0-mvp` elsewhere in the docs predate this change.

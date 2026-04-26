@@ -15,8 +15,8 @@
 use std::path::Path;
 
 use chrono::Utc;
-use runners_core::event_log::{self, EventLog};
-use runners_core::model::{EventDraft, EventKind, SignalType};
+use runner_core::event_log::{self, EventLog};
+use runner_core::model::{EventDraft, EventKind, SignalType};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use tauri::State;

@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "src-tauri",
-    "crates/runners-core",
+    "crates/runner-core",
 ]
 
 [workspace.package]

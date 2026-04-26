@@ -1,7 +1,7 @@
 // Error types shared between the Tauri binary and the `runners` CLI.
 //
 // Narrower than the app-wide error in `src-tauri/src/error.rs` — no rusqlite or
-// tauri deps leak in here. App code wraps this via `From<runners_core::Error>`.
+// tauri deps leak in here. App code wraps this via `From<runner_core::Error>`.
 
 use thiserror::Error;
 

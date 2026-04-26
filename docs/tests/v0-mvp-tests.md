@@ -54,7 +54,7 @@ pnpm tauri dev
 
 ### Cleanup between smokes
 
-Most smoke scenarios accumulate state. Between runs, delete `$APPDATA/runners/runners.db` and the `$APPDATA/runners/crews/` directory. On macOS: `rm -rf "$HOME/Library/Application Support/com.wycstudios.runners"` (add `-dev` for the dev profile if applicable).
+Most smoke scenarios accumulate state. Between runs, delete the app-data directory. On macOS: `rm -rf "$HOME/Library/Application Support/com.wycstudios.runner"` (add `-dev` for the dev profile if applicable).
 
 ---
 

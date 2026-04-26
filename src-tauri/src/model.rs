@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // Re-exports from the shared core so `crate::model::Event` keeps working.
-pub use runners_core::model::{Event, EventDraft, EventKind, SignalType};
+pub use runner_core::model::{Event, EventDraft, EventKind, SignalType};
 pub type Timestamp = DateTime<Utc>;
 pub type Ulid = String;
 
