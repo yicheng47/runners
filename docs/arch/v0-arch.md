@@ -109,18 +109,18 @@ Lifecycle: created by the user, edited freely, deleted when no longer needed. Pe
 
 ### 2.3 Runner — *one configured agent*
 
-An individual CLI agent within a crew: what binary to run, with what args, in what working directory, with what system prompt (the role's brief). Persistent config. A runner doesn't run either; it describes a process that will be spawned when a mission starts.
+An individual CLI agent: what binary to run, with what args, in what working directory, with what system prompt (the role's brief). Persistent config. A runner doesn't run on its own; it describes a process that will be spawned — either as a session inside a mission (the normal path), or as a standalone direct-chat session (see §2.6).
 
 A runner has two identifying fields:
 
-- **`handle`** — a lowercase slug (e.g. `coder`, `reviewer`, `tester`). Required, immutable once set, unique within the crew. Used everywhere addressing is needed: as `from` and `to` in events, as `--to <handle>` on the CLI, and in policy rules. Handles are what runners call each other by.
+- **`handle`** — a lowercase slug (e.g. `coder`, `reviewer`, `tester`). Required, immutable once set, **globally unique** across the app. Used everywhere addressing is needed: as `from` and `to` in events, as `--to <handle>` on the CLI, and in policy rules. Global uniqueness means `@impl` names the same runner whether it's seen in crew A's event log or crew B's.
 - **`display_name`** — a free-form label for the UI (e.g. "Coder", "Lead Reviewer"). Editable; not used in event fields or addressing.
 
 Keeping these separate means renaming a runner for the UI doesn't break briefs, rules, or historical events. `handle` is the identity; `display_name` is just presentation.
 
-A runner belongs to exactly one crew. Examples: `coder` (claude-code), `reviewer` (claude-code), `tester` (shell).
+**Runners are top-level config; crews compose them.** A runner is its own entity, not a child of a crew. The same runner can be a member of multiple crews — `@architect` can sit in `runners-feature` and `runners-ops` simultaneously. Crew membership lives in the `crew_runners` join table, which carries the per-crew `position` and `lead` flag (see §7.1). This is a deliberate post-C3 product change: a user typically curates a small stable of runners and reuses them across crews and ad-hoc direct chats; tying a runner to a single crew would force them to clone configs every time.
 
-Exactly one runner in a crew carries the `lead` flag (see §2.2). The orchestrator treats the lead as the default recipient of human broadcast messages and the mission-goal inject at startup; other runners receive traffic only when directly addressed. The flag lives on the runner record in SQLite, enforced by a unique partial index: `UNIQUE(crew_id) WHERE lead = 1`.
+Exactly one runner per crew carries the per-crew `lead` flag (see §2.2). The orchestrator treats the lead as the default recipient of human broadcast messages and the mission-goal inject at startup; other crew members receive traffic only when directly addressed. The flag lives on `crew_runners`, enforced by a unique partial index: `UNIQUE(crew_id) WHERE lead = 1`. Lead is per-crew, not per-runner — the same runner can be lead in one crew and a worker in another.
 
 ### 2.4 Orchestrator Policy — *the crew's decision rules*
 
@@ -145,11 +145,14 @@ This framing matters: when we say "the coordination bus is mission-scoped" or "t
 
 v0 constraint: a crew can have at most one live mission at a time. A crew can have many historical missions.
 
-### 2.6 Session — *one runner's PTY process, running inside a mission*
+### 2.6 Session — *one runner's PTY process*
 
 The runtime instance of a Runner. A Session is to a Runner what a Mission is to a Crew: the *run* of a *configuration*.
 
-A session exists if and only if a mission exists. One runner × one mission = one session. When the mission starts, each runner in the crew gets a session spawned for it. When the mission ends, every session in that mission is killed. A session cannot outlive its mission; a session cannot exist without one.
+A session has two flavors, distinguished by whether `mission_id` is set:
+
+- **Mission session** — spawned when a mission starts; one session per crew member. It dies with the mission. The runner participates in the crew's coordination bus, sees broadcasts, can receive `inject_stdin` from the orchestrator, etc. This is the path the v0 demo flow exercises.
+- **Direct-chat session** — spawned ad-hoc from the Runners page (see §2.3) without a parent mission. `mission_id` is null and the working directory lives on the session row directly. The runner is **not on any coordination bus** — there's no event log, no orchestrator, no inbox; it's just a one-on-one PTY between the human and the runner's CLI. Useful for "I just want to ask `@architect` something quickly" without spinning up a full crew.
 
 A session owns:
 - A PTY master handle (the only object in the system with a file descriptor to a running child process).
@@ -700,8 +703,7 @@ crews (
 
 runners (
   id TEXT PRIMARY KEY,
-  crew_id TEXT REFERENCES crews(id) ON DELETE CASCADE,
-  handle TEXT NOT NULL,               -- lowercase slug, immutable, unique within crew
+  handle TEXT NOT NULL UNIQUE,        -- globally unique slug; see §2.3
   display_name TEXT NOT NULL,         -- free-form UI label
   role TEXT NOT NULL,
   runtime TEXT NOT NULL,
@@ -710,18 +712,27 @@ runners (
   working_dir TEXT,
   system_prompt TEXT,
   env_json TEXT,
-  lead INTEGER NOT NULL DEFAULT 0,    -- 0 or 1; see §2.2 lead invariant
-  position INTEGER NOT NULL,          -- ordering within the crew (0-based)
-  created_at TEXT, updated_at TEXT,
-  UNIQUE (crew_id, handle)
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+
+-- Crew membership lives here, not on `runners`. One runner can join many
+-- crews; `lead` and `position` are per-crew (§2.3).
+crew_runners (
+  crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+  runner_id TEXT NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  lead INTEGER NOT NULL DEFAULT 0,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (crew_id, runner_id),
+  UNIQUE (crew_id, position)
 );
 
 -- Enforces the lead invariant (§2.2): exactly one lead per crew.
-CREATE UNIQUE INDEX one_lead_per_crew ON runners(crew_id) WHERE lead = 1;
+CREATE UNIQUE INDEX one_lead_per_crew ON crew_runners(crew_id) WHERE lead = 1;
 
 missions (
   id TEXT PRIMARY KEY,
-  crew_id TEXT REFERENCES crews(id) ON DELETE CASCADE,
+  crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
   title TEXT NOT NULL,                -- short label shown in missions list + event log
   status TEXT NOT NULL,               -- running | completed | aborted
   goal_override TEXT,                 -- null means inherit crews.goal
@@ -732,8 +743,12 @@ missions (
 
 sessions (
   id TEXT PRIMARY KEY,
-  mission_id TEXT REFERENCES missions(id) ON DELETE CASCADE,
-  runner_id TEXT REFERENCES runners(id) ON DELETE CASCADE,
+  -- Nullable: direct-chat sessions exist without a mission (§2.6). For
+  -- mission sessions, deleting the mission detaches the session
+  -- (`SET NULL`) so historical session rows survive for activity stats.
+  mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL,
+  runner_id TEXT NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
+  cwd TEXT,                           -- working dir; carried for direct-chat sessions
   status TEXT NOT NULL,               -- running | stopped | crashed
   pid INTEGER,                        -- OS process id once spawned; null while pending
   started_at TEXT, stopped_at TEXT
