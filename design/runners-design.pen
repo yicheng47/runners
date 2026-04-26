@@ -90,7 +90,7 @@
                   "type": "text",
                   "id": "F1vBm",
                   "fill": "#EDEDF0",
-                  "content": "runner",
+                  "content": "Runner",
                   "fontFamily": "Inter",
                   "fontSize": 18,
                   "fontWeight": "600"
@@ -126,7 +126,7 @@
                   "type": "text",
                   "id": "OVpMo",
                   "fill": "#9A9BA5",
-                  "content": "Runner",
+                  "content": "runner",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -146,7 +146,7 @@
                   "type": "text",
                   "id": "1N2i5",
                   "fill": "#EDEDF0",
-                  "content": "Crew",
+                  "content": "crew",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "600"
@@ -165,7 +165,7 @@
                   "type": "text",
                   "id": "my66k",
                   "fill": "#9A9BA5",
-                  "content": "Mission",
+                  "content": "mission",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -872,7 +872,7 @@
                   "type": "text",
                   "id": "V91dB",
                   "fill": "#EDEDF0",
-                  "content": "runner",
+                  "content": "Runner",
                   "fontFamily": "Inter",
                   "fontSize": 18,
                   "fontWeight": "600"
@@ -908,7 +908,7 @@
                   "type": "text",
                   "id": "y3maC",
                   "fill": "#9A9BA5",
-                  "content": "Runner",
+                  "content": "runner",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -927,7 +927,7 @@
                   "type": "text",
                   "id": "ApERz",
                   "fill": "#9A9BA5",
-                  "content": "Crew",
+                  "content": "crew",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -947,7 +947,7 @@
                   "type": "text",
                   "id": "DaGRq",
                   "fill": "#EDEDF0",
-                  "content": "Mission",
+                  "content": "mission",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "600"
@@ -1602,7 +1602,7 @@
                   "type": "text",
                   "id": "Ihwob",
                   "fill": "#EDEDF0",
-                  "content": "runner",
+                  "content": "Runner",
                   "fontFamily": "Inter",
                   "fontSize": 18,
                   "fontWeight": "600"
@@ -1638,7 +1638,7 @@
                   "type": "text",
                   "id": "HF2KL",
                   "fill": "#9A9BA5",
-                  "content": "Runner",
+                  "content": "runner",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -1657,7 +1657,7 @@
                   "type": "text",
                   "id": "ZOuUT",
                   "fill": "#9A9BA5",
-                  "content": "Crew",
+                  "content": "crew",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -1677,7 +1677,7 @@
                   "type": "text",
                   "id": "IpS5h",
                   "fill": "#EDEDF0",
-                  "content": "Mission",
+                  "content": "mission",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "600"
@@ -2994,7 +2994,7 @@
                   "type": "text",
                   "id": "vqapb",
                   "fill": "#EDEDF0",
-                  "content": "runner",
+                  "content": "Runner",
                   "fontFamily": "Inter",
                   "fontSize": 18,
                   "fontWeight": "600"
@@ -3030,7 +3030,7 @@
                   "type": "text",
                   "id": "26t1h",
                   "fill": "#9A9BA5",
-                  "content": "Runner",
+                  "content": "runner",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -3050,7 +3050,7 @@
                   "type": "text",
                   "id": "9utSb",
                   "fill": "#EDEDF0",
-                  "content": "Crew",
+                  "content": "crew",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "600"
@@ -3069,7 +3069,7 @@
                   "type": "text",
                   "id": "1c0sN",
                   "fill": "#9A9BA5",
-                  "content": "Mission",
+                  "content": "mission",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -5521,7 +5521,7 @@
                   "type": "text",
                   "id": "at0MA",
                   "fill": "#EDEDF0",
-                  "content": "runner",
+                  "content": "Runner",
                   "fontFamily": "Inter",
                   "fontSize": 18,
                   "fontWeight": "600"
@@ -5558,7 +5558,7 @@
                   "type": "text",
                   "id": "kxfC3",
                   "fill": "#EDEDF0",
-                  "content": "Runner",
+                  "content": "runner",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "600"
@@ -5577,7 +5577,7 @@
                   "type": "text",
                   "id": "fD5Ci",
                   "fill": "#9A9BA5",
-                  "content": "Crew",
+                  "content": "crew",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -5596,7 +5596,7 @@
                   "type": "text",
                   "id": "eju8x",
                   "fill": "#9A9BA5",
-                  "content": "Mission",
+                  "content": "mission",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -6963,7 +6963,7 @@
                   "type": "text",
                   "id": "s5lKo",
                   "fill": "#EDEDF0",
-                  "content": "runner",
+                  "content": "Runner",
                   "fontFamily": "Inter",
                   "fontSize": 18,
                   "fontWeight": "600"
@@ -7000,7 +7000,7 @@
                   "type": "text",
                   "id": "OtXRI",
                   "fill": "#EDEDF0",
-                  "content": "Runner",
+                  "content": "runner",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "600"
@@ -7019,7 +7019,7 @@
                   "type": "text",
                   "id": "BFg0Q",
                   "fill": "#9A9BA5",
-                  "content": "Crew",
+                  "content": "crew",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"
@@ -7038,7 +7038,7 @@
                   "type": "text",
                   "id": "fASBZ",
                   "fill": "#9A9BA5",
-                  "content": "Mission",
+                  "content": "mission",
                   "fontFamily": "Inter",
                   "fontSize": 14,
                   "fontWeight": "normal"

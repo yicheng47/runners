@@ -47,8 +47,8 @@ use std::time::Duration;
 use notify::{
     Event as NotifyEvent, EventKind as NotifyKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
-use runners_core::event_log::EventLog;
-use runners_core::model::{Event, EventKind};
+use runner_core::event_log::EventLog;
+use runner_core::model::{Event, EventKind};
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -477,7 +477,7 @@ impl BusRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runners_core::model::{EventDraft, EventKind, SignalType};
+    use runner_core::model::{EventDraft, EventKind, SignalType};
     use std::sync::Mutex as StdMutex;
     use std::time::Instant;
 

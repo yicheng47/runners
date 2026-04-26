@@ -29,7 +29,7 @@ export function Sidebar() {
 
       <div className="flex flex-col gap-1 px-5 pb-5">
         <div className="mb-4 flex items-center px-1 text-[18px] font-semibold tracking-tight text-neutral-900">
-          runners
+          runner
         </div>
         {NAV.map((item) =>
           item.enabled ? (

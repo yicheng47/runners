@@ -1,8 +1,8 @@
-# Runners
+# Runner
 
 Spawn a runner. Create your crew. Ship the feature.
 
-Runners is a local desktop app for assembling a crew of CLI coding agents — Claude Code, Codex, and friends — giving each runner a role and a brief, and coordinating their work from one window.
+Runner is a local desktop app for assembling a crew of CLI coding agents — Claude Code, Codex, and friends — giving each runner a role and a brief, and coordinating their work from one window.
 
 > Status: scaffolding. Nothing works yet.
 

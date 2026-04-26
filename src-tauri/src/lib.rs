@@ -15,7 +15,7 @@ pub struct AppState {
     pub db: Arc<db::DbPool>,
     /// Root of the app's per-user data tree — `$APPDATA/runners/` on real
     /// installs, a tempdir in tests. Mission commands resolve event-log paths
-    /// relative to this via `runners_core::event_log::path`.
+    /// relative to this via `runner_core::event_log::path`.
     pub app_data_dir: PathBuf,
     /// Live per-mission PTY sessions. Created at app start, shared across
     /// all Tauri commands and the reader threads they spawn.

@@ -1,19 +1,19 @@
 [package]
-name = "runners"
+name = "runner"
 version = "0.1.0"
 description = "An editor for teams of local coding agents (Claude Code, Codex, and friends)"
 edition.workspace = true
 authors.workspace = true
 
 [lib]
-name = "runners_lib"
+name = "runner_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-runners-core = { path = "../crates/runners-core" }
+runner-core = { path = "../crates/runner-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"

@@ -772,7 +772,7 @@ $APPDATA/runners/
                     └── {session_id}.log     # scrollback overflow
 ```
 
-macOS: `$APPDATA` = `~/Library/Application Support/com.wycstudios.runners`. Dev builds use `-dev` suffix.
+macOS: `$APPDATA` = `~/Library/Application Support/com.wycstudios.runner`. Dev builds use `-dev` suffix.
 
 ## 8. Process and thread model
 

@@ -1,12 +1,12 @@
 [package]
-name = "runners-core"
+name = "runner-core"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
-description = "Shared types and event-log primitives for the Runners app and CLI."
+description = "Shared types and event-log primitives for the Runner app and CLI."
 
 [lib]
-name = "runners_core"
+name = "runner_core"
 
 [dependencies]
 chrono = { workspace = true }
