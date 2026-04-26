@@ -240,51 +240,7 @@ export default function RunnerChat() {
       if (handle) clearActiveSession(handle);
     };
 
-    void Promise.all([
-      listen<OutputEvent>("session/output", (event) => {
-        const sid = sessionIdRef.current;
-        if (sid === null) {
-          preSpawnBuffer.current.outputs.push(event.payload);
-          return;
-        }
-        if (event.payload.session_id !== sid) return;
-        consumeOutput(event.payload);
-      }),
-      listen<ExitEvent>("session/exit", (event) => {
-        const sid = sessionIdRef.current;
-        if (sid === null) {
-          preSpawnBuffer.current.exits.push(event.payload);
-          return;
-        }
-        if (event.payload.session_id !== sid) return;
-        consumeExit(event.payload);
-      }),
-    ]).then(([fnOut, fnExit]) => {
-      if (cancelled) {
-        fnOut();
-        fnExit();
-        return;
-      }
-      unlistenOutput = fnOut;
-      unlistenExit = fnExit;
-    });
-
-    if (!state) {
-      setErr(
-        "Direct chat must be opened from the runner detail page or the sidebar.",
-      );
-      return;
-    }
-    if (startedRef.current) return;
-    startedRef.current = true;
-
-    // Attach mode — caller already knows the session id (sidebar
-    // re-entry). Skip the spawn, just route output to the terminal.
-    // Probe the backend so we fail fast if the SessionManager doesn't
-    // actually have this id (e.g., a sidebar entry hydrated from the
-    // DB after an app restart that killed the original PTY).
-    if (state.sessionId) {
-      const id = state.sessionId;
+    const attach = (id: string) => {
       sessionIdRef.current = id;
       setSessionId(id);
       void api.session.injectStdin(id, "").catch((e: unknown) => {
@@ -296,11 +252,10 @@ export default function RunnerChat() {
           setErr(msg);
         }
       });
-      // Re-attach after navigation lands on a fresh xterm with no
-      // scrollback. Send a SIGWINCH dance (one col narrower, then back)
-      // so claude-code does a full redraw and repaints its live state
-      // onto our blank grid. Without this, the pane stays empty until
-      // the user types and forces an emit.
+      // Re-attach lands on a fresh xterm with no scrollback. SIGWINCH
+      // dance (one col narrower, then back) makes claude-code redraw
+      // its live state onto the blank grid. Without this, the pane
+      // stays empty until the user types and forces an emit.
       const t = termRef.current;
       if (t) {
         const cols = t.cols;
@@ -317,46 +272,112 @@ export default function RunnerChat() {
         if (ev.session_id === id) consumeExit(ev);
       }
       preSpawnBuffer.current = { outputs: [], exits: [] };
-      return () => {
-        cancelled = true;
-        unlistenOutput?.();
-        unlistenExit?.();
-      };
-    }
+    };
 
-    // Spawn mode — first entry from the runner detail page.
-    if (!state.runnerId) {
-      setErr("Direct chat must be opened from the runner detail page.");
-      return;
-    }
-    const runnerId = state.runnerId;
-    const initTerm = termRef.current;
-    void api.session
-      .startDirect(
-        runnerId,
-        state.cwd ?? null,
-        initTerm?.cols ?? null,
-        initTerm?.rows ?? null,
-      )
-      .then((spawned) => {
-        sessionIdRef.current = spawned.id;
-        setSessionId(spawned.id);
-        if (handle) setActiveSession(handle, spawned.id);
-        const t = termRef.current;
-        if (t) {
-          void api.session.resize(spawned.id, t.cols, t.rows).catch(() => {});
+    // Critical ordering: register both event listeners BEFORE any
+    // spawn/attach call. Tauri's `listen()` is async — if we kick off
+    // `session_start_direct` first, the child can emit its first output
+    // (or exit, for fast-fail runners) before the listener exists, and
+    // the pane stays stuck on "starting…" with the bytes on the floor.
+    void (async () => {
+      const [fnOut, fnExit] = await Promise.all([
+        listen<OutputEvent>("session/output", (event) => {
+          const sid = sessionIdRef.current;
+          if (sid === null) {
+            preSpawnBuffer.current.outputs.push(event.payload);
+            return;
+          }
+          if (event.payload.session_id !== sid) return;
+          consumeOutput(event.payload);
+        }),
+        listen<ExitEvent>("session/exit", (event) => {
+          const sid = sessionIdRef.current;
+          if (sid === null) {
+            preSpawnBuffer.current.exits.push(event.payload);
+            return;
+          }
+          if (event.payload.session_id !== sid) return;
+          consumeExit(event.payload);
+        }),
+      ]);
+      if (cancelled) {
+        fnOut();
+        fnExit();
+        return;
+      }
+      unlistenOutput = fnOut;
+      unlistenExit = fnExit;
+
+      if (startedRef.current) return;
+      startedRef.current = true;
+
+      // Attach mode — caller already knows the session id (sidebar
+      // re-entry).
+      if (state?.sessionId) {
+        attach(state.sessionId);
+        return;
+      }
+
+      // Spawn mode — first entry from the runner detail page.
+      if (state?.runnerId) {
+        const runnerId = state.runnerId;
+        const initTerm = termRef.current;
+        try {
+          const spawned = await api.session.startDirect(
+            runnerId,
+            state.cwd ?? null,
+            initTerm?.cols ?? null,
+            initTerm?.rows ?? null,
+          );
+          if (cancelled) return;
+          sessionIdRef.current = spawned.id;
+          setSessionId(spawned.id);
+          if (handle) setActiveSession(handle, spawned.id);
+          const t = termRef.current;
+          if (t) {
+            void api.session
+              .resize(spawned.id, t.cols, t.rows)
+              .catch(() => {});
+          }
+          for (const ev of preSpawnBuffer.current.outputs) {
+            if (ev.session_id === spawned.id) consumeOutput(ev);
+          }
+          for (const ev of preSpawnBuffer.current.exits) {
+            if (ev.session_id === spawned.id) consumeExit(ev);
+          }
+          preSpawnBuffer.current = { outputs: [], exits: [] };
+        } catch (e) {
+          setErr(String(e));
         }
-        for (const ev of preSpawnBuffer.current.outputs) {
-          if (ev.session_id === spawned.id) consumeOutput(ev);
+        return;
+      }
+
+      // No location.state — typical after a window reload while on the
+      // chat route. Look up the runner's live direct-chat session id
+      // from the backend (the same field the sidebar consumes from
+      // `runner/activity`) and re-attach.
+      if (!handle) {
+        setErr(
+          "Direct chat must be opened from the runner detail page or the sidebar.",
+        );
+        return;
+      }
+      try {
+        const runner = await api.runner.getByHandle(handle);
+        if (cancelled) return;
+        const activity = await api.runner.activity(runner.id);
+        if (cancelled) return;
+        if (activity.direct_session_id) {
+          attach(activity.direct_session_id);
+        } else {
+          setErr(
+            "No live direct-chat session for this runner. Start one from the runner detail page.",
+          );
         }
-        for (const ev of preSpawnBuffer.current.exits) {
-          if (ev.session_id === spawned.id) consumeExit(ev);
-        }
-        preSpawnBuffer.current = { outputs: [], exits: [] };
-      })
-      .catch((e: unknown) => {
+      } catch (e) {
         setErr(String(e));
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
