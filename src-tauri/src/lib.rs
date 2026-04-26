@@ -13,7 +13,7 @@ use tauri::Manager;
 
 pub struct AppState {
     pub db: Arc<db::DbPool>,
-    /// Root of the app's per-user data tree — `$APPDATA/runners/` on real
+    /// Root of the app's per-user data tree — `$APPDATA/runner/` on real
     /// installs, a tempdir in tests. Mission commands resolve event-log paths
     /// relative to this via `runner_core::event_log::path`.
     pub app_data_dir: PathBuf,
@@ -37,7 +37,7 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
-            let db_path = app_data_dir.join("runners.db");
+            let db_path = app_data_dir.join("runner.db");
             let pool = Arc::new(db::open_pool(&db_path)?);
             app.manage(AppState {
                 db: pool,

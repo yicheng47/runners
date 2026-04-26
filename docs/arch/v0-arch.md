@@ -10,7 +10,7 @@ Runners is a local desktop app. A user configures a **crew** of CLI coding agent
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Tauri process (runners desktop app)                                         │
+│ Tauri process (runner desktop app)                                          │
 │                                                                             │
 │  ┌──────────────────────┐   ┌──────────────────────┐   ┌─────────────────┐  │
 │  │ MissionManager       │   │ SessionManager       │   │ EventBus        │  │
@@ -33,13 +33,13 @@ Runners is a local desktop app. A user configures a **crew** of CLI coding agent
 │  │ Runner session (one per runner × mission)                            │   │
 │  │   ┌──────────┐   PTY   ┌─────────────────────────────────────────┐   │   │
 │  │   │  master  │ ◄────►  │  child: claude-code / codex / shell     │   │   │
-│  │   └──────────┘         │  env: RUNNERS_CREW_ID,                  │   │   │
-│  │                        │       RUNNERS_MISSION_ID,               │   │   │
-│  │                        │       RUNNERS_RUNNER_HANDLE,              │   │   │
-│  │                        │       RUNNERS_EVENT_LOG, PATH=…         │   │   │
+│  │   └──────────┘         │  env: RUNNER_CREW_ID,                   │   │   │
+│  │                        │       RUNNER_MISSION_ID,                │   │   │
+│  │                        │       RUNNER_HANDLE,                    │   │   │
+│  │                        │       RUNNER_EVENT_LOG, PATH=…          │   │   │
 │  │                        └─────┬───────────────────────────────────┘   │   │
 │  └─────────────────────────────┼──────────────────────────────────────┘   │
-│                                │ runs `runners signal` / `runners msg`    │
+│                                │ runs `runner signal` / `runner msg`      │
 │                                ▼                                          │
 │                  ┌─────────────────────────────┐                          │
 │                  │  events.ndjson (per mission)│                          │
@@ -56,7 +56,7 @@ Runners is a local desktop app. A user configures a **crew** of CLI coding agent
 
 ### 1.2 The one-paragraph story
 
-The user defines a **crew** (configuration: runners + policy). They click **Start Mission**, which creates a **mission** (runtime container), spawns one PTY-backed **session** per runner, and composes each runner's system prompt with the mission brief, the crew roster, and coordination instructions. Runners run real CLI binaries inside PTYs. They coordinate through two primitives — **signals** (typed events for the orchestrator to route on) and **messages** (flat prose stream for runner-to-runner conversation) — both carried through a bundled `runners` CLI that appends to the mission's NDJSON file. The **orchestrator** tails that file, applies a rule-based policy, and dispatches actions (inject stdin, ask human, pause, etc.). The UI is a read-only tail that renders terminals, messages, signals, and HITL prompts.
+The user defines a **crew** (configuration: runners + policy). They click **Start Mission**, which creates a **mission** (runtime container), spawns one PTY-backed **session** per runner, and composes each runner's system prompt with the mission brief, the crew roster, and coordination instructions. Runners run real CLI binaries inside PTYs. They coordinate through two primitives — **signals** (typed events for the orchestrator to route on) and **messages** (flat prose stream for runner-to-runner conversation) — both carried through a bundled `runner` CLI that appends to the mission's NDJSON file. The **orchestrator** tails that file, applies a rule-based policy, and dispatches actions (inject stdin, ask human, pause, etc.). The UI is a read-only tail that renders terminals, messages, signals, and HITL prompts.
 
 ## 2. Concepts
 
@@ -103,7 +103,7 @@ The persistent "who's on the team and how they work together" record. A crew has
 
 **Every crew must have exactly one lead runner.** The lead is the human's counterpart in the crew: the mission goal and human-originated broadcast signals route to the lead by default, and the lead dispatches work to the other runners via directed messages. This is a hard invariant — a crew with zero runners or zero leads is invalid and cannot start a mission. The first runner added to a new crew becomes lead automatically; the user can reassign lead between existing runners, but cannot remove the lead runner without first designating a replacement. The lead is a routing convention, not a privileged capability: any runner can emit signals, post directed messages, and trigger orchestrator actions. Lead only governs *where inbound-from-human signals land by default*.
 
-**Lead is also the default HITL gateway.** When a worker needs human input, it does not ask the human directly — it emits an `ask_lead` signal whose payload carries the question. The orchestrator wakes the lead (signals trigger actions; messages don't — see §5.5.0), who decides whether to answer from their own context or escalate to the human via `ask_human`. If the lead escalates, the human's answer flows back to the lead, who forwards it to the original worker as a directed message that the worker picks up on its next `runners msg read`. This keeps the human's attention focused on one interlocutor and lets the lead absorb, filter, or batch worker questions. See §5.5.0 for the protocol details (the `ask_lead` signal, the `on_behalf_of` payload field on `ask_human`, and the forwarding flow). Workers *may* emit `ask_human` directly as a fallback — it's not forbidden at the protocol layer — but the default runner system prompt instructs them to go through the lead.
+**Lead is also the default HITL gateway.** When a worker needs human input, it does not ask the human directly — it emits an `ask_lead` signal whose payload carries the question. The orchestrator wakes the lead (signals trigger actions; messages don't — see §5.5.0), who decides whether to answer from their own context or escalate to the human via `ask_human`. If the lead escalates, the human's answer flows back to the lead, who forwards it to the original worker as a directed message that the worker picks up on its next `runner msg read`. This keeps the human's attention focused on one interlocutor and lets the lead absorb, filter, or batch worker questions. See §5.5.0 for the protocol details (the `ask_lead` signal, the `on_behalf_of` payload field on `ask_human`, and the forwarding flow). Workers *may* emit `ask_human` directly as a fallback — it's not forbidden at the protocol layer — but the default runner system prompt instructs them to go through the lead.
 
 Lifecycle: created by the user, edited freely, deleted when no longer needed. Persisted in SQLite.
 
@@ -192,13 +192,13 @@ A signal carries an optional `payload` (JSON) but the payload is meant for the o
 Prose, addressed either to the mission (broadcast) or to a specific crewmate (direct). Runner-to-runner (and human-readable). Grammar: sentence.
 
 Two shapes:
-- **Broadcast** — `runners msg post "<text>"`. Goes to everyone's inbox. Use for status updates, open questions, mission-wide announcements.
-- **Direct** — `runners msg post --to <runner> "<text>"`. Goes to that runner's inbox only. Use for targeted questions, replies, or private back-and-forth.
+- **Broadcast** — `runner msg post "<text>"`. Goes to everyone's inbox. Use for status updates, open questions, mission-wide announcements.
+- **Direct** — `runner msg post --to <runner> "<text>"`. Goes to that runner's inbox only. Use for targeted questions, replies, or private back-and-forth.
 
 Examples:
 - broadcast: `"Branch feat/x is ready. Touched auth.rs and session.rs."`
-- direct: `runners msg post --to reviewer "Line 47 in auth.rs: null check missing when the token is expired."`
-- direct reply: `runners msg post --to coder "Kept the 30s timeout — provider is slow on cold start."`
+- direct: `runner msg post --to reviewer "Line 47 in auth.rs: null check missing when the token is expired."`
+- direct reply: `runner msg post --to coder "Kept the 30s timeout — provider is slow on cold start."`
 
 Messages are **flat in v0** — one stream per mission, no thread scoping. Each runner consumes messages through their **inbox** (§2.7.5): broadcasts plus directly-addressed messages.
 
@@ -216,7 +216,7 @@ Every runner has an **inbox**: the subset of the mission's messages that are rel
 inbox(h) = all events in the mission where kind = "message" AND (to = null OR to = h)
 ```
 
-`runners msg read` returns the calling runner's inbox, sorted by ULID (chronological). `--since <ts>` restricts to messages newer than a given ULID/timestamp so agents can poll without re-reading history.
+`runner msg read` returns the calling runner's inbox, sorted by ULID (chronological). `--since <ts>` restricts to messages newer than a given ULID/timestamp so agents can poll without re-reading history.
 
 This design keeps the storage model simple (one event log per mission, same as before) while giving each runner a clean "what for me" view. Broadcasts end up in everyone's inbox; direct messages end up in exactly one.
 
@@ -247,7 +247,7 @@ Every coordination primitive is persisted as an **event** — one line in the pe
 
 The `kind` field is the primitive discriminator — `signal`, `message`, and (later) `fact`, `thread_opened`. For `kind: "signal"`, the `type` field carries the signal's semantic verb (`review_requested`, `changes_requested`, etc.); for `kind: "message"`, `type` is omitted and the prose lives in `payload.text`. The orchestrator and UI project events into primitive-specific views based on `kind`.
 
-This is a transport detail — runners interact through the CLI verbs (`runners signal`, `runners msg`), not the event schema directly. There is no separate `signal_emitted` or `message_posted` event type; the `kind` field is authoritative.
+This is a transport detail — runners interact through the CLI verbs (`runner signal`, `runner msg`), not the event schema directly. There is no separate `signal_emitted` or `message_posted` event type; the `kind` field is authoritative.
 
 ## 3. Mission lifecycle
 
@@ -257,7 +257,7 @@ This is a transport detail — runners interact through the CLI verbs (`runners 
 user clicks Start Mission on a crew
   └─► MissionManager.start(crew_id):
         ├─ insert `missions` row (status=running, mission_id = ULID)
-        ├─ mkdir $APPDATA/runners/crews/{crew_id}/missions/{mission_id}/
+        ├─ mkdir $APPDATA/runner/crews/{crew_id}/missions/{mission_id}/
         ├─ touch events.ndjson
         ├─ for each runner in crew:
         │     composed_prompt = compose(runner.system_prompt,
@@ -303,11 +303,11 @@ portable_pty::openpty(rows, cols)
   └─ slave handle   → given to child via spawn_command()
 
 Child inherits:
-  PATH                = $APPDATA/runners/bin:<original PATH>
-  RUNNERS_CREW_ID     = <ulid>
-  RUNNERS_MISSION_ID  = <ulid>
-  RUNNERS_RUNNER_HANDLE = coder
-  RUNNERS_EVENT_LOG   = $APPDATA/runners/crews/<crew>/missions/<mission>/events.ndjson
+  PATH                = $APPDATA/runner/bin:<original PATH>
+  RUNNER_CREW_ID      = <ulid>
+  RUNNER_MISSION_ID   = <ulid>
+  RUNNER_HANDLE       = coder
+  RUNNER_EVENT_LOG    = $APPDATA/runner/crews/<crew>/missions/<mission>/events.ndjson
 
 Reader thread (blocking):
   loop { read(master) → emit session:{id}:out event, push to scrollback ring }
@@ -323,7 +323,7 @@ MissionManager builds each runner's prompt from four parts:
 1. **The user-authored brief** (`runners.system_prompt`).
 2. **The mission brief** (`missions.goal_override` or `crews.goal`).
 3. **The roster** — crewmates' names, roles, one-line brief summaries.
-4. **Coordination notes** — how to use `runners signal` and `runners msg`, the crew's allowed signal types, and conventions for inbox checking.
+4. **Coordination notes** — how to use `runner signal` and `runner msg`, the crew's allowed signal types, and conventions for inbox checking.
 
 Example for the `reviewer` runner (display name "Reviewer"):
 
@@ -346,11 +346,11 @@ Handles (the lowercase names in backticks above) are what you use to
 address crewmates. Display names are shown for readability only.
 
 == Coordination ==
-- Signal milestones with `runners signal <type>`.
+- Signal milestones with `runner signal <type>`.
   Signal types: review_requested, changes_requested, approved, blocked.
-- Post prose with `runners msg post "<text>"` (broadcast) or
-  `runners msg post --to <handle> "<text>"` (direct to one crewmate).
-- Your inbox is `runners msg read` (broadcasts + messages addressed to you).
+- Post prose with `runner msg post "<text>"` (broadcast) or
+  `runner msg post --to <handle> "<text>"` (direct to one crewmate).
+- Your inbox is `runner msg read` (broadcasts + messages addressed to you).
   Check it at natural task boundaries:
     * before starting a new task,
     * before emitting a signal that affects another runner,
@@ -403,7 +403,7 @@ Kill: drop master → SIGHUP via `portable-pty`; escalate to SIGKILL if child li
 ### 5.1 Transport
 
 ```
-$APPDATA/runners/crews/{crew_id}/missions/{mission_id}/events.ndjson
+$APPDATA/runner/crews/{crew_id}/missions/{mission_id}/events.ndjson
 ```
 
 One line per event. Append-only. **Each mission has its own file** — scopes log rotation, crash-replay, and deletion.
@@ -411,12 +411,12 @@ One line per event. Append-only. **Each mission has its own file** — scopes lo
 Why a file instead of an in-memory bus:
 - **Debuggable** — `tail -f events.ndjson | jq .`.
 - **Crash-durable** — whatever's on disk survived the crash.
-- **Atomic** under explicit guards (see §5.1.1) — concurrent `runners` invocations interleave correctly at line granularity.
+- **Atomic** under explicit guards (see §5.1.1) — concurrent `runner` invocations interleave correctly at line granularity.
 - **Replayable for free** — restart the orchestrator, re-scan, resume.
 
 #### 5.1.1 Concurrent-write correctness
 
-Multiple runners can invoke `runners signal` / `runners msg` at the same time from different PTYs. We need line-granular atomicity regardless of filesystem. The approach:
+Multiple runners can invoke `runner signal` / `runner msg` at the same time from different PTYs. We need line-granular atomicity regardless of filesystem. The approach:
 
 1. Open the log with `O_APPEND | O_WRONLY | O_CREAT`.
 2. Acquire an advisory exclusive lock: `flock(fd, LOCK_EX)`.
@@ -430,7 +430,7 @@ This gives us:
 
 **Filesystem requirements.** The app data directory must be on a local POSIX filesystem (APFS, ext4, XFS, etc.). Network filesystems (NFS, SMB) and iCloud-synced volumes may not honor `flock()` or may re-order appends across clients; v0 documents this and checks at app startup.
 
-Writers: only the bundled `runners` CLI writes to the log (the Rust backend also writes orchestrator-generated events — it uses the same `flock`-guarded path). No other process should write to this file; the orchestrator refuses to start a mission if another holder has an exclusive lock at boot.
+Writers: only the bundled `runner` CLI writes to the log (the Rust backend also writes orchestrator-generated events — it uses the same `flock`-guarded path). No other process should write to this file; the orchestrator refuses to start a mission if another holder has an exclusive lock at boot.
 
 ### 5.2 Event schema
 
@@ -468,18 +468,18 @@ Three layers — answers "how does the agent know to append to the event log?"
 
 #### Layer 1 — system prompt tells the convention
 
-The composed prompt (§4.3) includes a Coordination section describing the `runners` CLI and listing allowed signal types. LLM agents already know how to read CLI docs and invoke tools — same capability they use for `git`, `gh`, `npm`.
+The composed prompt (§4.3) includes a Coordination section describing the `runner` CLI and listing allowed signal types. LLM agents already know how to read CLI docs and invoke tools — same capability they use for `git`, `gh`, `npm`.
 
 #### Layer 2 — the CLI exists on PATH with context in env
 
-The backend prepends `$APPDATA/runners/bin/` to PATH and drops the `runners` binary there at first run. At session spawn, env vars point at the mission's log and identify the runner.
+The backend prepends `$APPDATA/runner/bin/` to PATH and drops the `runner` binary there at first run. At session spawn, env vars point at the mission's log and identify the runner.
 
 On invocation, the CLI:
 1. Reads env vars; errors if missing.
-2. Builds an event (ULID, timestamps, `from` = `$RUNNERS_RUNNER_HANDLE`, `crew_id`, `mission_id`, `kind`).
+2. Builds an event (ULID, timestamps, `from` = `$RUNNER_HANDLE`, `crew_id`, `mission_id`, `kind`).
 3. For directed messages, validates `--to <handle>` against the crew's runner handles (rejects unknown handles with a clear stderr message).
-3. For signals: validates `type` against the allowlist sidecar at `$APPDATA/runners/crews/{crew_id}/signal_types.json`.
-4. Appends one JSON line to `$RUNNERS_EVENT_LOG` via `open(O_APPEND | O_WRONLY)` + `write_all` + close.
+3. For signals: validates `type` against the allowlist sidecar at `$APPDATA/runner/crews/{crew_id}/signal_types.json`.
+4. Appends one JSON line to `$RUNNER_EVENT_LOG` via `open(O_APPEND | O_WRONLY)` + `write_all` + close.
 5. Exits 0.
 
 Each invocation writes ≤ one 4KB line in one `write` syscall; concurrent emitters interleave safely.
@@ -493,7 +493,7 @@ User-authored briefs include examples at the moments where signaling or messagin
 - No in-band protocol in the PTY stream. Not parsing stdout for magic markers.
 - Works for any CLI agent (MCP or not). Only requirement: can run shell commands.
 - Fails visibly. If the agent forgets to signal, the orchestrator sees nothing and the user sees an idle runner.
-- Fully observable. `$ runners signal review_requested` shows up literally in the terminal pane; the resulting event shows up in the timeline and messages panel.
+- Fully observable. `$ runner signal review_requested` shows up literally in the terminal pane; the resulting event shows up in the timeline and messages panel.
 
 #### Failure mode: hallucinated signal types
 
@@ -566,22 +566,22 @@ If two `ask_human` prompts are ever outstanding at once and we need to discrimin
 1. **Worker asks the lead.** Worker emits an `ask_lead` signal with the question in its payload:
 
    ```
-   runners signal ask_lead --payload '{"question": "Should I add notify-debouncer-full?", "context": "Pros: … Cons: …"}'
+   runner signal ask_lead --payload '{"question": "Should I add notify-debouncer-full?", "context": "Pros: … Cons: …"}'
    ```
 
    `ask_lead` is a built-in signal type. Its built-in rule is `ask_lead → inject_stdin @lead` (payload rendered into the injection template). The worker's stdin stays blocked waiting; the lead wakes.
 
 2. **Lead decides.**
-   - **Answer from own context.** Lead posts a directed message back to the worker via `runners msg post --to @impl "…"`. The worker picks it up on its next `runners msg read`. Pull-based; no new wake-up needed because the worker is already polling between turns per its system prompt.
+   - **Answer from own context.** Lead posts a directed message back to the worker via `runner msg post --to @impl "…"`. The worker picks it up on its next `runner msg read`. Pull-based; no new wake-up needed because the worker is already polling between turns per its system prompt.
    - **Escalate to human.** Lead emits `ask_human` with `payload.on_behalf_of: "@impl"` (the original asker's handle) and a `prompt` that restates the question for the human. The orchestrator renders the card; the UI uses `on_behalf_of` to show the attribution chain (*@impl → @architect → you*).
 
 3. **Human responds.** On click, `human_response` fires. The orchestrator injects the result into **the lead's stdin** (the lead was the asker of record for that `question_id`). The lead then forwards the answer onward via a directed message:
 
    ```
-   runners msg post --to @impl "Human approved: use notify-debouncer-full."
+   runner msg post --to @impl "Human approved: use notify-debouncer-full."
    ```
 
-   The worker picks up the answer on its next `runners msg read`.
+   The worker picks up the answer on its next `runner msg read`.
 
 This is not a new protocol — it is `ask_lead` + `ask_human` + directed messages composed. The only schema additions are the `ask_lead` signal type and the optional `on_behalf_of` field on `human_question`.
 
@@ -597,7 +597,7 @@ When `inject_stdin` fires, the orchestrator automatically enriches the template 
 
 **Watermark tracking.** The orchestrator maintains a per-runner `read_watermark` — the ULID of the newest message that runner has been shown. The watermark advances only on authoritative events, not on heuristics:
 
-- Every `runners msg read` invocation ends by emitting an `inbox_read` audit event with `kind: "signal"`, `type: "inbox_read"`, `from: <runner>`, `payload: { up_to: <max_ulid_returned> }`. The orchestrator advances the runner's watermark to `payload.up_to`.
+- Every `runner msg read` invocation ends by emitting an `inbox_read` audit event with `kind: "signal"`, `type: "inbox_read"`, `from: <runner>`, `payload: { up_to: <max_ulid_returned> }`. The orchestrator advances the runner's watermark to `payload.up_to`.
 - An `inject_stdin` that included an unread summary also emits a `stdin_injected` event with `payload: { watermark: <max_ulid_in_summary> }`, so the next summary is scoped strictly to messages newer than this value — the injection itself counts as showing them.
 
 The watermark is initialized to `"0"` (before any ULID) at mission start and is rebuilt from the log on crash-replay by scanning these events. It is never inferred from `--since` flags (agents can set those to arbitrary values).
@@ -612,10 +612,10 @@ Reviewer requested changes — check msg read for details.
 You have 2 new messages:
   [reviewer 12:38]: Line 47 auth.rs needs a null check.
   [reviewer 12:39]: session.rs timeout is 30s; our convention is 10s.
-Run `runners msg read` for full content.
+Run `runner msg read` for full content.
 ```
 
-The Coder wakes up with both the signal and the conversation context in one interruption. If the Coder does then call `runners msg read`, the CLI returns the same two messages, emits `inbox_read { up_to: <reviewer's second message ULID> }`, and the watermark is already at that point from the injection — so nothing further is shown on the next signal unless genuinely new.
+The Coder wakes up with both the signal and the conversation context in one interruption. If the Coder does then call `runner msg read`, the CLI returns the same two messages, emits `inbox_read { up_to: <reviewer's second message ULID> }`, and the watermark is already at that point from the injection — so nothing further is shown on the next signal unless genuinely new.
 
 This makes the urgent path (signal → inject_stdin) carry the async path (direct messages) with it automatically. Senders don't decide between "just message" and "signal-plus-message" — they send a message for data, and signal only when they need immediate attention; the enrichment glues the two together on arrival, and the watermark keeps them in sync.
 
@@ -669,13 +669,13 @@ Rendered from `crew.runners` at mission start into each runner's prompt as `== Y
 
 This is how the Reviewer knows there's a Coder.
 
-### 6.3 The `runners` CLI surface in v0
+### 6.3 The `runner` CLI surface in v0
 
 ```
-runners signal <type> [--payload <json>]
-runners msg    post <text> [--to <runner>]
-runners msg    read [--since <ts>] [--from <runner>]
-runners help
+runner signal <type> [--payload <json>]
+runner msg    post <text> [--to <runner>]
+runner msg    read [--since <ts>] [--from <runner>]
+runner help
 ```
 
 One binary. Two verbs. Context always from env. No event-DAG flags in v0 — causality is implicit (ordering in the log) or in-payload where it needs to be explicit (`human_response.payload.question_id`).
@@ -758,10 +758,10 @@ sessions (
 ### 7.2 Filesystem
 
 ```
-$APPDATA/runners/
+$APPDATA/runner/
 ├── bin/
-│   └── runners                              # the CLI (signal + msg)
-├── runners.db                               # SQLite
+│   └── runner                               # the CLI (signal + msg)
+├── runner.db                                # SQLite
 └── crews/
     └── {crew_id}/
         ├── signal_types.json                # CLI allowlist sidecar
@@ -809,8 +809,8 @@ For v0 scale (one live mission, ≤ ~10 sessions): fine.
 
 **Threads** — when missions grow past 2 runners or 1 hour, messages get noisy. Add:
 - `runners thread open <name>` → returns thread_id
-- `runners msg post --thread <id> <text>`
-- `runners msg read --thread <id>`
+- `runner msg post --thread <id> <text>`
+- `runner msg read --thread <id>`
 - Orchestrator rules gain "open thread on signal X" action
 - UI splits message stream by thread
 
@@ -844,11 +844,11 @@ Both live on the same event log as new `kind` values. No transport changes.
 
 ## 12. Open questions
 
-1. CLI installation: bundled with `.app`, copied to `$APPDATA/runners/bin/` on first run — ok?
+1. CLI installation: bundled with `.app`, copied to `$APPDATA/runner/bin/` on first run — ok?
 2. Resize debounce: 100ms is a guess; tune with a real TUI.
 3. Signal type allowlist: per-crew only (current), or global defaults + per-crew overrides?
 4. `from` field: locked to env (v0), or `--from` override?
-5. Does `runners msg read` return everything or paginate? v0: everything, sorted by ULID.
+5. Does `runner msg read` return everything or paginate? v0: everything, sorted by ULID.
 6. Does the orchestrator ever inject messages (not signals) into runners' stdin? v0: yes — when it routes a signal to a runner, it can include a summary of recent messages as context.
 
 ## 13. What would break this architecture

@@ -1,7 +1,7 @@
 // Filesystem layout helpers for per-mission event logs.
 //
 // Arch §7.2 pins the tree as:
-//   $APPDATA/runners/crews/{crew_id}/missions/{mission_id}/events.ndjson
+//   $APPDATA/runner/crews/{crew_id}/missions/{mission_id}/events.ndjson
 //
 // Callers pass the resolved `app_data` dir (whatever `tauri::Manager::path()`
 // returned at startup, or a tempdir in tests) so this module stays platform-

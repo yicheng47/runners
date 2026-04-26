@@ -10,7 +10,7 @@ From a clean launch of the app, a user can:
 
 1. Create a **Crew** on the Crews page, then add two runners to it (one `claude-code` lead, one `shell` worker) on the **Crew Detail** page. Per C5.5a, runners are top-level config and shared across crews — adding a runner to a crew creates a `crew_runners` membership row, not a new runner. The lead invariant is per-crew (one lead per crew, enforced via partial unique index on `crew_runners`) and is checked end-to-end.
 2. Click **Start Mission**, fill the goal, and see the Mission workspace open with two live PTY sessions.
-3. Watch the lead runner receive the goal via stdin, draft a plan, and post a directed message to the worker; see the worker pick it up on its next `runners msg read`.
+3. Watch the lead runner receive the goal via stdin, draft a plan, and post a directed message to the worker; see the worker pick it up on its next `runner msg read`.
 4. See a worker emit an `ask_lead` signal; watch the lead decide to escalate via `ask_human`; click **Approve** on the resulting card; see the lead receive the response and forward it to the worker.
 5. Post a broadcast human signal from the workspace input and have it land on the lead by default.
 6. Close and reopen the mission; the feed replays and the orchestrator's in-memory state reconstructs.
@@ -46,7 +46,7 @@ Anything beyond this is explicitly v0.x or later.
     │     │
     │     └─► C5  mission lifecycle commands
     │           │
-    │           ├─► C6  PTY session runtime ─► C9    `runners` CLI
+    │           ├─► C6  PTY session runtime ─► C9    `runner` CLI
     │           │                          └─► C8.5  Runners page + Runner Detail + direct chat
     │           │
     │           └─► C7  event bus + notify watcher ─► C8  orchestrator v0
@@ -130,7 +130,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
   - `EventLog::append(event)` — acquires `flock(LOCK_EX)`, writes a single `write(2)`, unlocks. One event = one line.
   - `EventLog::read_from(offset)` — streaming parser used by the watcher.
 - `src-tauri/src/event_log/ulid.rs` — monotonic ULID generator (millisecond-sortable, collision-safe within the same ms).
-- Path helper: `$APPDATA/runners/crews/{crew_id}/missions/{mission_id}/events.ndjson`.
+- Path helper: `$APPDATA/runner/crews/{crew_id}/missions/{mission_id}/events.ndjson`.
 
 **Tests.** Concurrent append from N threads never interleaves, ULID ordering is stable, parser round-trips all `EventKind` variants.
 
@@ -144,7 +144,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 **Deliverables.**
 - `src-tauri/src/commands/mission.rs`:
-  - `mission_start(crew_id, title, goal_override, cwd)` — validates the crew has ≥1 runner and exactly one lead, creates the mission row, creates the mission dir, exports the crew's `signal_types` column to `$APPDATA/runners/crews/{crew_id}/signal_types.json` (per arch §5.3 Layer 2 — the CLI reads this sidecar to validate emitted signal types), then appends `mission_start` and `mission_goal` events to the log.
+  - `mission_start(crew_id, title, goal_override, cwd)` — validates the crew has ≥1 runner and exactly one lead, creates the mission row, creates the mission dir, exports the crew's `signal_types` column to `$APPDATA/runner/crews/{crew_id}/signal_types.json` (per arch §5.3 Layer 2 — the CLI reads this sidecar to validate emitted signal types), then appends `mission_start` and `mission_goal` events to the log.
   - `mission_stop(mission_id)` — marks the mission stopped, appends `mission_stopped`.
   - `mission_list`, `mission_get`.
 - Returns enough context to the frontend that C10 can navigate to the workspace.
@@ -162,7 +162,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 **Deliverables.**
 - `src-tauri/src/session/manager.rs`:
   - `SessionManager` owns `HashMap<SessionId, Session>`.
-  - `spawn(mission, runner)` — uses `portable-pty`, sets env (`RUNNERS_CREW_ID`, `RUNNERS_MISSION_ID`, `RUNNERS_RUNNER_HANDLE`, `RUNNERS_EVENT_LOG`, augmented `PATH` that puts the bundled `runners` CLI first).
+  - `spawn(mission, runner)` — uses `portable-pty`, sets env (`RUNNER_CREW_ID`, `RUNNER_MISSION_ID`, `RUNNER_HANDLE`, `RUNNER_EVENT_LOG`, augmented `PATH` that puts the bundled `runner` CLI first).
   - `inject_stdin(session_id, text)` — through a write channel.
   - `pause(session_id)` (SIGSTOP on Unix), `resume(session_id)` (SIGCONT), `kill(session_id)`.
 - Reader thread per session: stdout/stderr → ring buffer (last N KB) → Tauri event `session/output`.
@@ -204,7 +204,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
     - `signal ask_lead (from: <worker>, payload: { question, context }) → inject_stdin @lead` with the payload rendered into the injection template. The worker-asks-lead half of the lead-mediated HITL flow.
     - `signal ask_human (from: <runner>, payload: { prompt, choices, on_behalf_of? }) → emit human_question event + open card in UI`. If `payload.on_behalf_of` is present (the lead-mediated case), carry it into the `human_question` payload so the UI can render the attribution chain.
     - `signal human_response → inject_stdin to the runner that emitted the matching ask_human` — the lead in the lead-mediated flow, the worker in the fallback direct flow. Orchestrator looks up the original asker by `question_id`.
-  - Lead-forwards-answer back to worker and any runner-to-runner exchange are **directed messages**, not orchestrator actions — recipients see them on their next `runners msg read`. No `directed message → inject` rule in MVP.
+  - Lead-forwards-answer back to worker and any runner-to-runner exchange are **directed messages**, not orchestrator actions — recipients see them on their next `runner msg read`. No `directed message → inject` rule in MVP.
   - Dispatch ledger (in-memory map of `triggering_event_id → handled`) so replay is idempotent.
   - Pending-ask map keyed by `question_id`.
 
@@ -226,7 +226,7 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 - **Backend.**
   - `commands/runner.rs::runner_list_with_activity()` — extends the existing `runner_list` to include `running_session_count` (from `sessions WHERE status = 'running'`) and `open_mission_count` (from `crew_runners ⨝ missions WHERE status = 'running'`). The Runners list cards need both counters.
   - `commands/runner.rs::runner_get_by_handle(handle)` — used by `/runners/:handle` so the URL is stable across runner-id rotations.
-  - `commands/session.rs::session_start_direct(runner_id, cwd)` — inserts a `sessions` row with `mission_id = NULL` and the chosen `cwd`, then spawns through the existing `SessionManager::spawn` path. Differences from the mission flavor: no `RUNNERS_MISSION_ID`, `RUNNERS_EVENT_LOG`, or `RUNNERS_CREW_ID` env vars are set, and the runner does not join any event bus or orchestrator. The `runners` CLI must no-op gracefully when those vars are absent (small change in C9-land — the CLI errors today on `RUNNERS_EVENT_LOG`-not-set, which would crash a direct-chat agent the moment it tries to emit an event).
+  - `commands/session.rs::session_start_direct(runner_id, cwd)` — inserts a `sessions` row with `mission_id = NULL` and the chosen `cwd`, then spawns through the existing `SessionManager::spawn` path. Differences from the mission flavor: no `RUNNER_MISSION_ID`, `RUNNER_EVENT_LOG`, or `RUNNER_CREW_ID` env vars are set, and the runner does not join any event bus or orchestrator. The `runner` CLI must no-op gracefully when those vars are absent (small change in C9-land — the CLI errors today on `RUNNER_EVENT_LOG`-not-set, which would crash a direct-chat agent the moment it tries to emit an event).
   - Live activity events: `SessionManager` emits `runner/activity { runner_id, running_sessions, open_missions }` on every spawn, reap, and kill so the Runners list and Runner Detail can update without polling.
 - **Frontend.**
   - `src/components/Sidebar.tsx` — flip the placeholder Runner item to an enabled `NavLink to="/runners"`. Order in the design is Runner / Crew / Mission, top to bottom.
@@ -250,18 +250,18 @@ C3 and C4 can run in parallel after C2 lands. C6 and C7 can run in parallel afte
 
 ---
 
-## C9 — `runners` CLI binary
+## C9 — `runner` CLI binary
 
 **Goal.** The binary each runner's PTY calls to post events. Without this, runners can't talk to the log.
 
 **Deliverables.**
-- `cli/` crate in the workspace: `runners` binary.
+- `cli/` crate in the workspace: `runner` binary.
 - Resolves envelope fields from env vars set by C6.
 - Commands:
-  - `runners signal <type> [--payload <json>]`
-  - `runners msg post <text> [--to <handle>]`
-  - `runners msg read [--since <ts>] [--from <handle>]` — emits `inbox_read` signal with `payload.up_to = max ULID`.
-  - `runners help`.
+  - `runner signal <type> [--payload <json>]`
+  - `runner msg post <text> [--to <handle>]`
+  - `runner msg read [--since <ts>] [--from <handle>]` — emits `inbox_read` signal with `payload.up_to = max ULID`.
+  - `runner help`.
 - Reuses `event_log` crate from C4 directly (shared crate, not duplicated code).
 
 **Tests.** Integration test: spawn a shell with the env a real session would have, run CLI commands, assert events land in the ndjson.

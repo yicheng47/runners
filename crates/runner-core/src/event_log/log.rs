@@ -3,7 +3,7 @@
 // Arch §5.4 (durability) requires:
 //   - A single serialized write per event line.
 //   - An exclusive lock covering both ID assignment and the write, so concurrent
-//     processes (the app, multiple `runners` CLI invocations) interleave at
+//     processes (the app, multiple `runner` CLI invocations) interleave at
 //     whole-line granularity and produce strictly monotonic ULIDs.
 //   - Append-only semantics so the watcher can stream new lines by byte offset.
 //

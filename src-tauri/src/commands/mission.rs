@@ -286,7 +286,7 @@ pub fn stop(conn: &mut Connection, app_data_dir: &Path, id: &str) -> Result<Miss
 }
 
 /// Write the crew's signal-type allowlist to
-/// `$APPDATA/runners/crews/{crew_id}/signal_types.json` atomically so a
+/// `$APPDATA/runner/crews/{crew_id}/signal_types.json` atomically so a
 /// crash during write never leaves a half-written file that the CLI would
 /// read and reject valid types on.
 ///

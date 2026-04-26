@@ -102,7 +102,7 @@ Already landed (10 tests):
 - `mission_start_on_crewless_crew_errors` — "no runners" error variant, no DB rows created.
 - `mission_start_on_leadless_crew_errors` — enforced in Rust even though C1 auto-leads — defense in depth.
 - `mission_start_writes_two_opening_events` — exactly `mission_start` then `mission_goal`, with ULIDs in that order.
-- `mission_start_exports_signal_types_sidecar` — arch §5.3 Layer 2 — verify the JSON at `$APPDATA/runners/crews/{crew_id}/signal_types.json` matches the crew's current `signal_types`.
+- `mission_start_exports_signal_types_sidecar` — arch §5.3 Layer 2 — verify the JSON at `$APPDATA/runner/crews/{crew_id}/signal_types.json` matches the crew's current `signal_types`.
 - `mission_stop_appends_mission_stopped_and_marks_row` — row transitions to `completed`/`aborted`; terminal event is the last line.
 - `mission_list_separates_active_and_past` — used by C11's tabs.
 
@@ -147,10 +147,10 @@ File: `src-tauri/tests/pty_runtime.rs`
   Spawn a session running `sh`. Inject `echo hi\n`. Assert the output stream contains `hi` within 500ms.
 
 - **I1.2 — Env wiring.**
-  Spawn `sh -c 'env | grep RUNNERS_'`. Assert stdout contains the four env vars: `RUNNERS_CREW_ID`, `RUNNERS_MISSION_ID`, `RUNNERS_RUNNER_HANDLE`, `RUNNERS_EVENT_LOG`.
+  Spawn `sh -c 'env | grep RUNNER_'`. Assert stdout contains the four env vars: `RUNNER_CREW_ID`, `RUNNER_MISSION_ID`, `RUNNER_HANDLE`, `RUNNER_EVENT_LOG`.
 
-- **I1.3 — PATH preserves `runners` CLI first.**
-  Spawn `sh -c 'which runners'`. Assert it resolves to `$APPDATA/runners/bin/runners`, not any system fallback.
+- **I1.3 — PATH preserves `runner` CLI first.**
+  Spawn `sh -c 'which runner'`. Assert it resolves to `$APPDATA/runner/bin/runner`, not any system fallback.
 
 - **I1.4 — Pause and resume (Unix).**
   Spawn `sh -c 'while true; do echo tick; sleep 0.1; done'`. After 3 ticks, `SIGSTOP`. Wait 500ms — no new ticks. `SIGCONT`. Ticks resume. `kill`. Process exits.
@@ -165,7 +165,7 @@ File: `src-tauri/tests/pty_runtime.rs`
 
 ```rust
 let tmp = tempfile::tempdir()?;
-let pool = db::open_pool(&tmp.path().join("runners.db"))?;
+let pool = db::open_pool(&tmp.path().join("runner.db"))?;
 let mut mgr = SessionManager::new(pool.clone(), tmp.path().to_path_buf());
 let mission = fixtures::mission_with_one_shell_runner(&pool, tmp.path())?;
 mgr.spawn(&mission, &mission.runners[0])?;
@@ -173,32 +173,32 @@ mgr.inject_stdin(&sid, "echo hi\n")?;
 // assert on mgr.output_stream(sid) with a timeout
 ```
 
-## I2 — C9: `runners` CLI ↔ event log roundtrip
+## I2 — C9: `runner` CLI ↔ event log roundtrip
 
 File: `cli/tests/roundtrip.rs` (in the `cli/` crate).
 
 ### Scenarios
 
-- **I2.1 — `runners signal` appends one line.**
-  Spawn `runners signal mission_goal --payload '{"text":"go"}'` with the env a real session has. Assert the NDJSON file grew by exactly one line, parsable as a v0.2 envelope (arch §5.2), with `from` = `$RUNNERS_RUNNER_HANDLE`.
+- **I2.1 — `runner signal` appends one line.**
+  Spawn `runner signal mission_goal --payload '{"text":"go"}'` with the env a real session has. Assert the NDJSON file grew by exactly one line, parsable as a v0.2 envelope (arch §5.2), with `from` = `$RUNNER_HANDLE`.
 
-- **I2.2 — `runners signal` rejects unknown types.**
-  With the sidecar at `$APPDATA/runners/crews/{id}/signal_types.json` containing the default seven, run `runners signal not_a_real_type`. Exit code non-zero, stderr mentions the allowlist, no line appended.
+- **I2.2 — `runner signal` rejects unknown types.**
+  With the sidecar at `$APPDATA/runner/crews/{id}/signal_types.json` containing the default seven, run `runner signal not_a_real_type`. Exit code non-zero, stderr mentions the allowlist, no line appended.
 
-- **I2.3 — `runners msg post --to impl` routes.**
+- **I2.3 — `runner msg post --to impl` routes.**
   Assert the envelope has `kind: "message"`, `to: "impl"`, `payload.text` set.
 
-- **I2.4 — `runners msg post --to ghost` rejects unknown handles.**
+- **I2.4 — `runner msg post --to ghost` rejects unknown handles.**
   Exit non-zero, stderr mentions the crew roster; no line appended.
 
-- **I2.5 — `runners msg read` emits `inbox_read`.**
-  Pre-populate the log with two directed messages to `impl`. Run `runners msg read`. Assert: stdout contains both messages in ULID order, and a final `signal inbox_read` line was appended with `payload.up_to` = max ULID of the two.
+- **I2.5 — `runner msg read` emits `inbox_read`.**
+  Pre-populate the log with two directed messages to `impl`. Run `runner msg read`. Assert: stdout contains both messages in ULID order, and a final `signal inbox_read` line was appended with `payload.up_to` = max ULID of the two.
 
 - **I2.6 — Concurrent writers interleave atomically.**
   10 shells × 100 invocations each write signals to the same log. Resulting NDJSON: exactly 1000 lines, no partial lines, no interleaved bytes. Every line parses.
 
 - **I2.7 — Missing env vars fail fast.**
-  Unset `RUNNERS_EVENT_LOG`; CLI exits non-zero with a pointer at which env var is missing.
+  Unset `RUNNER_EVENT_LOG`; CLI exits non-zero with a pointer at which env var is missing.
 
 ### Fixture sketch
 
@@ -206,13 +206,13 @@ File: `cli/tests/roundtrip.rs` (in the `cli/` crate).
 let tmp = tempfile::tempdir()?;
 let mission_dir = prepare_mission_dir(tmp.path(), "c1", "m1");
 let env = &[
-    ("RUNNERS_CREW_ID", "c1"),
-    ("RUNNERS_MISSION_ID", "m1"),
-    ("RUNNERS_RUNNER_HANDLE", "impl"),
-    ("RUNNERS_EVENT_LOG", mission_dir.join("events.ndjson").to_str().unwrap()),
+    ("RUNNER_CREW_ID", "c1"),
+    ("RUNNER_MISSION_ID", "m1"),
+    ("RUNNER_HANDLE", "impl"),
+    ("RUNNER_EVENT_LOG", mission_dir.join("events.ndjson").to_str().unwrap()),
     ("PATH", &format!("{}:{}", cli_bin_dir.display(), std::env::var("PATH")?)),
 ];
-let out = Command::new("sh").args(["-c", "runners signal mission_goal"]).envs(env).output()?;
+let out = Command::new("sh").args(["-c", "runner signal mission_goal"]).envs(env).output()?;
 assert!(out.status.success());
 // parse the last line of events.ndjson and assert the envelope shape
 ```
@@ -235,19 +235,19 @@ Driver pseudocode:
     → events.ndjson now has: mission_start, mission_goal
 3.  orchestrator starts; observes mission_goal → inject_stdin @lead
     → appends: stdin_injected(target=lead, triggered_by=mission_goal.id)
-4.  driver feeds the `lead` PTY a scripted response: `runners msg post --to impl "go"`
+4.  driver feeds the `lead` PTY a scripted response: `runner msg post --to impl "go"`
     → appends: message(from=lead, to=impl, text="go")
-5.  driver feeds the `impl` PTY: `runners msg read` then `runners signal ask_lead …`
+5.  driver feeds the `impl` PTY: `runner msg read` then `runner signal ask_lead …`
     → appends: inbox_read(up_to=<msg ulid>), ask_lead(from=impl)
 6.  orchestrator observes ask_lead → inject_stdin @lead (with inbox summary)
     → appends: stdin_injected(target=lead, watermark=<inbox max>)
-7.  driver feeds `lead`: `runners signal ask_human --payload '{"prompt":"…","choices":["yes","no"],"on_behalf_of":"impl"}'`
+7.  driver feeds `lead`: `runner signal ask_human --payload '{"prompt":"…","choices":["yes","no"],"on_behalf_of":"impl"}'`
     → appends: ask_human(from=lead, payload.on_behalf_of=impl), human_question(from=orchestrator, payload.triggered_by=<ask_human.id>)
 8.  driver simulates human click: orchestrator.handle_human_click(question_id, "yes")
     → appends: human_response(from=human, payload.question_id=<q.id>, choice=yes), stdin_injected(target=lead, triggered_by=<human_response.id>)
-9.  driver feeds `lead`: `runners msg post --to impl "Human approved."`
+9.  driver feeds `lead`: `runner msg post --to impl "Human approved."`
     → appends: message(from=lead, to=impl)
-10. driver feeds `impl`: `runners msg read`
+10. driver feeds `impl`: `runner msg read`
     → appends: inbox_read(up_to=<approved msg ulid>)
 11. mission_stop
     → appends: mission_stopped
@@ -270,13 +270,13 @@ After step 8, **hard-kill** the driver's orchestrator and restart it from scratc
 
 # Smoke (UI, manual)
 
-Each scenario: **Steps** then **Expected**. Before each smoke, delete `$APPDATA/runners/` to start clean.
+Each scenario: **Steps** then **Expected**. Before each smoke, delete `$APPDATA/runner/` to start clean.
 
 ## C3 — Config UI (Crews, Crew Detail, Add Slot)
 
 ### Prereqs & setup
 
-- C1, C2, C3 merged. `pnpm install` run. Clean `$APPDATA/runners/`.
+- C1, C2, C3 merged. `pnpm install` run. Clean `$APPDATA/runner/`.
 - `pnpm tauri dev`.
 
 ### Scenarios
@@ -341,8 +341,8 @@ Expected: positions persist (refresh to confirm); `LEAD` badge still attached to
 
 ### Prereqs & setup
 
-- C1–C10 merged. `runners` CLI on PATH inside PTYs (C6's env setup).
-- Fixture crew **Smoke Crew** with exactly two runners, both runtime `shell`, command `sh`: `lead` (carries `LEAD`) and `impl`. Using `shell` runners makes behavior deterministic — the smoker types `runners signal …` and `runners msg post …` by hand.
+- C1–C10 merged. `runner` CLI on PATH inside PTYs (C6's env setup).
+- Fixture crew **Smoke Crew** with exactly two runners, both runtime `shell`, command `sh`: `lead` (carries `LEAD`) and `impl`. Using `shell` runners makes behavior deterministic — the smoker types `runner signal …` and `runner msg post …` by hand.
 - `pnpm tauri dev`. Pre-C11, start the mission via DevTools:
 
 ```js
@@ -372,24 +372,24 @@ Expected within ~1s of `mission_start`:
 
 **S10.3 — Directed message is pull-based**
 
-1. In `lead` pane: `runners msg post --to impl "Start reading the spec."`
+1. In `lead` pane: `runner msg post --to impl "Start reading the spec."`
 2. Wait 2s.
 
 Expected:
 - A `message` event appears in the feed (`from: "lead"`, `to: "impl"`).
 - `impl` PTY shows nothing yet — messages don't wake recipients (arch §2.7.3, §5.6).
 
-3. In `impl` pane: `runners msg read`.
+3. In `impl` pane: `runner msg read`.
 
 Expected: the message is returned in stdout; an `inbox_read` signal event appends with `payload.up_to = <that message's ULID>`.
 
 **S10.4 — Lead-mediated HITL**
 
-1. `impl`: `runners signal ask_lead --payload '{"question":"A or B?","context":"A fast, B small."}'`
+1. `impl`: `runner signal ask_lead --payload '{"question":"A or B?","context":"A fast, B small."}'`
 
 Expected: `ask_lead` event; `lead` PTY receives rendered injection containing the question; injection includes the unread-inbox summary per arch §5.5.1 (possibly empty).
 
-2. `lead`: `runners signal ask_human --payload '{"prompt":"Use A?","choices":["yes","no"],"on_behalf_of":"impl"}'`
+2. `lead`: `runner signal ask_human --payload '{"prompt":"Use A?","choices":["yes","no"],"on_behalf_of":"impl"}'`
 
 Expected: card appears in the side panel with attribution chain `*@impl → @lead → you*` (because `on_behalf_of` is set); **yes** / **no** buttons visible.
 
@@ -397,8 +397,8 @@ Expected: card appears in the side panel with attribution chain `*@impl → @lea
 
 Expected: `human_response` signal appended with `payload: { question_id, choice: "yes" }`; `lead` PTY receives the response (lead is the asker of record); card resolves/disappears.
 
-4. `lead`: `runners msg post --to impl "Human approved: use A."`
-5. `impl`: `runners msg read`.
+4. `lead`: `runner msg post --to impl "Human approved: use A."`
+5. `impl`: `runner msg read`.
 
 Expected: `impl` sees the forwarded message; a second `inbox_read` appends.
 
@@ -443,13 +443,13 @@ Expected: feed visibly segregates `kind: message` rows from `kind: signal`. Orch
 await window.__TAURI__.core.invoke('mission_stop', { missionId: '<id>' });
 ```
 
-Optionally delete `$APPDATA/runners/crews/<crew_id>/missions/<mission_id>/` for the next run.
+Optionally delete `$APPDATA/runner/crews/<crew_id>/missions/<mission_id>/` for the next run.
 
 ## C11 — Missions list + Start Mission modal
 
 ### Prereqs & setup
 
-- C1–C11 merged. Clean `$APPDATA/runners/`.
+- C1–C11 merged. Clean `$APPDATA/runner/`.
 - `pnpm tauri dev`.
 
 ### Scenarios
@@ -473,7 +473,7 @@ Expected: modal closes; route becomes `/missions/<id>`; workspace opens (all C10
 1. In Crews, create `Empty Crew` with zero runners.
 2. Start Mission → pick `Empty Crew` → Start.
 
-Expected: modal surfaces a clean error ("crew has no runners" or "no lead"); mission row is NOT created; no log directory appears under `$APPDATA/runners/crews/<empty crew id>/missions/`.
+Expected: modal surfaces a clean error ("crew has no runners" or "no lead"); mission row is NOT created; no log directory appears under `$APPDATA/runner/crews/<empty crew id>/missions/`.
 
 **S11.4 — Active tab highlights pending asks**
 
@@ -507,7 +507,7 @@ From a clean launch of the app:
 
 1. On Crews, create **Demo Crew**. Add two runners: one `claude-code` `lead` (real LLM agent), one `shell` worker (e.g. `sh`). The lead invariant holds at every step.
 2. Click **Start Mission**, fill goal `Write a README stub for this repo.`, cwd = a scratch dir. Workspace opens with two live PTYs.
-3. Lead receives the goal via stdin, drafts a plan, and posts a directed message to the worker. Worker picks it up on its next `runners msg read`.
+3. Lead receives the goal via stdin, drafts a plan, and posts a directed message to the worker. Worker picks it up on its next `runner msg read`.
 4. Worker emits an `ask_lead` signal; lead decides to escalate via `ask_human`; click **Approve** on the resulting card; lead receives the response and forwards it to the worker via a directed message.
 5. Post a broadcast human signal from the workspace input; it lands on the lead by default (payload omits `target`).
 6. Close the mission tab and reopen from the Missions list; the feed replays and the orchestrator's in-memory state reconstructs (pending asks, watermarks, dispatch ledger).

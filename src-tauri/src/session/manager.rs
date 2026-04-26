@@ -151,9 +151,9 @@ impl SessionManager {
     /// `sessions` row, starts the reader thread, and returns a summary for
     /// the frontend.
     ///
-    /// `app_data_dir` is the root of `$APPDATA/runners/` so we can prepend
+    /// `app_data_dir` is the root of `$APPDATA/runner/` so we can prepend
     /// `<app_data_dir>/bin` onto the child's PATH — arch §5.3 Layer 2 and
-    /// v0-mvp.md C9 both require the bundled `runners` CLI to win over any
+    /// v0-mvp.md C9 both require the bundled `runner` CLI to win over any
     /// system binary with the same name.
     pub fn spawn(
         self: &Arc<Self>,
@@ -205,11 +205,11 @@ impl SessionManager {
         }
         cmd.env("PATH", new_path);
 
-        cmd.env("RUNNERS_CREW_ID", &mission.crew_id);
-        cmd.env("RUNNERS_MISSION_ID", &mission.id);
-        cmd.env("RUNNERS_RUNNER_HANDLE", &runner.handle);
+        cmd.env("RUNNER_CREW_ID", &mission.crew_id);
+        cmd.env("RUNNER_MISSION_ID", &mission.id);
+        cmd.env("RUNNER_HANDLE", &runner.handle);
         cmd.env(
-            "RUNNERS_EVENT_LOG",
+            "RUNNER_EVENT_LOG",
             events_log_path.to_string_lossy().to_string(),
         );
         if let Some(wd) = mission.cwd.as_deref() {
@@ -328,8 +328,8 @@ impl SessionManager {
     /// Runner Detail page.
     ///
     /// Differences vs. the mission-flavored `spawn`:
-    ///   - No `RUNNERS_MISSION_ID`, `RUNNERS_EVENT_LOG`, or
-    ///     `RUNNERS_CREW_ID` env vars. The runner's CLI is on PATH, but
+    ///   - No `RUNNER_MISSION_ID`, `RUNNER_EVENT_LOG`, or
+    ///     `RUNNER_CREW_ID` env vars. The runner's CLI is on PATH, but
     ///     anything it tries to do that needs those vars no-ops or errors
     ///     gracefully — direct chats are not on any coordination bus.
     ///   - `cwd` lives on the session row directly, since there's no
@@ -373,7 +373,7 @@ impl SessionManager {
             cmd.env(k, v);
         }
         // PATH still gets the bundled CLI prepended — the runner might
-        // call `runners --help` interactively; let it find the binary.
+        // call `runner --help` interactively; let it find the binary.
         let bin_dir = app_data_dir.join("bin");
         let sep = if cfg!(windows) { ';' } else { ':' };
         let parent_path = std::env::var_os("PATH").unwrap_or_default();
@@ -383,9 +383,9 @@ impl SessionManager {
             new_path.push(parent_path);
         }
         cmd.env("PATH", new_path);
-        cmd.env("RUNNERS_RUNNER_HANDLE", &runner.handle);
-        // Deliberately NOT setting RUNNERS_CREW_ID, RUNNERS_MISSION_ID,
-        // RUNNERS_EVENT_LOG, MISSION_CWD — direct chats are off-bus.
+        cmd.env("RUNNER_HANDLE", &runner.handle);
+        // Deliberately NOT setting RUNNER_CREW_ID, RUNNER_MISSION_ID,
+        // RUNNER_EVENT_LOG, MISSION_CWD — direct chats are off-bus.
 
         let mut child = pair
             .slave

@@ -30,7 +30,7 @@ MVP" and the §7.1 schema's `runners.crew_id NOT NULL` assumption.
 
 We're still in MVP with no production users, so instead of layering a
 `0002_*.sql` on top we rewrite the one-and-only migration in place. Dev
-bootstraps fresh; any local DB file (`$APPDATA/runners/runners.db`) gets
+bootstraps fresh; any local DB file (`$APPDATA/runner/runner.db`) gets
 deleted once.
 
 **`runners`** becomes global.
@@ -69,7 +69,7 @@ CREATE UNIQUE INDEX one_lead_per_crew ON crew_runners(crew_id) WHERE lead = 1;
 - `crew_list_runners(crew_id) -> Vec<Runner>` — join `crew_runners` + `runners` ordered by position.
 
 **Sessions:**
-- `session_start_direct(runner_id, cwd) -> Session` — C6 hook. Inserts a `sessions` row with `mission_id = NULL`, event log at `$APPDATA/runners/sessions/{session_id}/events.ndjson` (instead of `missions/{mission_id}/events.ndjson`).
+- `session_start_direct(runner_id, cwd) -> Session` — C6 hook. Inserts a `sessions` row with `mission_id = NULL`, event log at `$APPDATA/runner/sessions/{session_id}/events.ndjson` (instead of `missions/{mission_id}/events.ndjson`).
 - `session_stop(session_id)` — works for both mission-backed and direct sessions.
 - `mission_start` (C5) — unchanged contract; internally reads `crew_list_runners` instead of `runner::list(crew_id)`.
 
@@ -96,7 +96,7 @@ CREATE UNIQUE INDEX one_lead_per_crew ON crew_runners(crew_id) WHERE lead = 1;
 
 Downstream chunks to adjust once C5.5a lands:
 - **C6** builds on the new `sessions` shape (nullable `mission_id`, explicit `cwd`); `session_start_direct` is wired to a PTY here.
-- **C9** (`runners` CLI): `@handle` stays the addressing primitive but is now globally unique — the `signal_types` sidecar file layout gets simpler (one file per runner instead of per-crew lookup).
+- **C9** (`runner` CLI): `@handle` stays the addressing primitive but is now globally unique — the `signal_types` sidecar file layout gets simpler (one file per runner instead of per-crew lookup).
 
 ## Out of scope for C5.5
 

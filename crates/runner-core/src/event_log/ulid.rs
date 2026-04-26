@@ -1,7 +1,7 @@
 // Monotonic ULID generation, safe across processes when rebased from disk.
 //
 // The in-process mutex here gives thread-safe monotonicity. But arch §5.2 also
-// demands ordering-by-ID across *processes* — two concurrent `runners signal`
+// demands ordering-by-ID across *processes* — two concurrent `runner signal`
 // invocations, each with its own `UlidGen`, must not emit ULIDs out-of-order
 // relative to the file append order, or watermark-by-max-ULID (§5.5.1) silently
 // drops events.

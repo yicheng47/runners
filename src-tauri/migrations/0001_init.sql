@@ -3,7 +3,7 @@
 -- Superseded the per-crew runner model from the original v0 draft. See
 -- docs/impls/v0-mvp-c5-5-shared-runners.md. In MVP (no prod data yet) we
 -- rewrite DDL in place rather than layering a 0002 migration. Dev users
--- delete their local DB file ($APPDATA/runners/runners.db) once to pick
+-- delete their local DB file ($APPDATA/runner/runner.db) once to pick
 -- up the new shape.
 --
 -- Overview:

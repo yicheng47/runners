@@ -1,5 +1,5 @@
-// Runners shared core — types and event-log primitives used by both the Tauri
-// app binary and the `runners` CLI.
+// Runner shared core — types and event-log primitives used by both the Tauri
+// app binary and the `runner` CLI.
 
 pub mod error;
 pub mod event_log;

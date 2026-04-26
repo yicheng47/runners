@@ -1,6 +1,6 @@
 // Event log primitives — append-only NDJSON, monotonic ULIDs, path helpers.
 // Consumed by the Tauri binary (C5 mission lifecycle, C7 watcher) and by the
-// standalone `runners` CLI (C9).
+// standalone `runner` CLI (C9).
 
 pub mod log;
 pub mod path;

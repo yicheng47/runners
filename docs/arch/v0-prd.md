@@ -4,7 +4,7 @@
 >
 > **Canonicity.** `docs/arch/v0-arch.md` is the source of truth for all protocol, schema, and event-model decisions. Where this PRD conflicts with the arch doc, the arch doc wins. Sections marked **⚠️ SUPERSEDED** below have been overtaken by arch updates and are kept only for historical context until the PRD is rewritten:
 > - §5 (Golden path) — the `changes_requested → ask_human → inject Coder` flow has been replaced by lead-mediated HITL (arch §2.2, §5.5.0).
-> - §6.8 (`runners` CLI) — the `--correlation-id` / `--causation-id` flags are dropped (arch §5.2).
+> - §6.8 (`runner` CLI) — the `--correlation-id` / `--causation-id` flags are dropped (arch §5.2).
 > - §6.11.1 — "clicking a message highlights correlated signals" relies on the dropped correlation fields.
 
 ## 1. Problem
@@ -33,7 +33,7 @@ v0 proves the loop works end-to-end with two runners on a single mission. v1+ sc
 - **Session** — the live PTY process for a single runner within a single mission.
 - **Signal** — a typed notification runners emit for the orchestrator to route on. Verb grammar (`review_requested`, `approved`, `blocked`).
 - **Message** — prose posted to the mission. Can be broadcast (to the mission) or directed (to a specific runner via `--to`).
-- **Inbox** — each runner's projection of the mission: broadcast messages plus messages addressed directly to it. Read via `runners msg read`. Pull-based: runners check their inbox on convention; there is no automatic interrupt for arriving messages.
+- **Inbox** — each runner's projection of the mission: broadcast messages plus messages addressed directly to it. Read via `runner msg read`. Pull-based: runners check their inbox on convention; there is no automatic interrupt for arriving messages.
 - **Orchestrator** — the rule-based router that reads signals and decides what happens next. Signals are the urgent wake-up channel; when the orchestrator injects stdin on a signal, it also appends a summary of the recipient's unread inbox so relevant messages ride along.
 
 ## 4. v0 scope
@@ -68,24 +68,24 @@ The concrete loop v0 must support end-to-end:
    - `reviewer` (Reviewer) — runtime `claude-code`, same working dir, brief "When review is requested, read `coder`'s messages and the diff, then signal `approved` or `changes_requested` and post messages with specific feedback."
 3. User clicks **Start Mission**. Both PTYs spawn. User sees two terminals, one per runner.
 4. Coder writes code, runs tests, then:
-   - `runners msg post "Branch feat/x is ready. I refactored auth and added session tests."`
-   - `runners signal review_requested`
-5. Orchestrator routes `review_requested`: injects into Reviewer's stdin "A review is pending — check `runners msg read`."
+   - `runner msg post "Branch feat/x is ready. I refactored auth and added session tests."`
+   - `runner signal review_requested`
+5. Orchestrator routes `review_requested`: injects into Reviewer's stdin "A review is pending — check `runner msg read`."
 6. Reviewer:
-   - `runners msg read` (sees Coder's message)
+   - `runner msg read` (sees Coder's message)
    - reads the diff
-   - `runners msg post --to coder "Line 47 auth.rs needs a null check."`
-   - `runners msg post --to coder "session.rs timeout is 30s; our convention is 10s."`
-   - `runners signal changes_requested`
+   - `runner msg post --to coder "Line 47 auth.rs needs a null check."`
+   - `runner msg post --to coder "session.rs timeout is 30s; our convention is 10s."`
+   - `runner signal changes_requested`
        *(orchestrator rule fires: injects into Coder's stdin — "Reviewer requested changes — check msg read." — and automatically appends a summary of Coder's 2 unread direct messages.)*
 7. Orchestrator policy for `changes_requested` says `ask_human`. The HITL panel pops a card: *"Reviewer requested changes. Accept and forward to Coder, or override?"*
-8. User clicks **Accept**. Orchestrator injects into Coder's stdin: "Reviewer requested changes — check `runners msg read`."
+8. User clicks **Accept**. Orchestrator injects into Coder's stdin: "Reviewer requested changes — check `runner msg read`."
 9. Coder:
-   - `runners msg read`
+   - `runner msg read`
    - fixes the null check; defends the 30s timeout
-   - `runners msg post "Added null check. Kept 30s timeout — provider is slow on cold start."`
-   - `runners signal review_requested`
-10. Reviewer reads, agrees, `runners signal approved`.
+   - `runner msg post "Added null check. Kept 30s timeout — provider is slow on cold start."`
+   - `runner signal review_requested`
+10. Reviewer reads, agrees, `runner signal approved`.
 11. User clicks **End Mission**. Sessions terminate, mission status flips to `completed`, the mission appears in the crew's history list.
 
 If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
@@ -126,15 +126,15 @@ If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
 - **Sessions outlive the UI.** Closing the mission control window does not kill sessions — agents keep running, events keep flowing, the orchestrator keeps routing. Re-opening re-attaches by fetching each session's scrollback ring. A session ends only on End Mission, child exit, or app quit. This means the human can close the monitor and still rely on the orchestrator + rules without cutting anyone out of the loop.
 
 ### 6.5 Signals — typed orchestrator-routable notifications
-- Runners emit via `runners signal <type> [--payload <json>]`.
+- Runners emit via `runner signal <type> [--payload <json>]`.
 - Types are per-crew allowlisted (stored in `crews.signal_types`).
 - Payload is optional JSON for the orchestrator's decision logic.
 - Emitted signals appear as events in the coordination bus (see §6.7) and drive the orchestrator.
 
 ### 6.6 Messages — prose with broadcast or direct addressing
-- Broadcast: `runners msg post "<text>"` — visible to everyone in the mission.
-- Direct: `runners msg post --to <runner> "<text>"` — lands only in that runner's inbox.
-- Read the inbox: `runners msg read [--since <ts>] [--from <runner>]` — returns the calling runner's inbox (broadcasts + directs addressed to me), sorted by ULID.
+- Broadcast: `runner msg post "<text>"` — visible to everyone in the mission.
+- Direct: `runner msg post --to <runner> "<text>"` — lands only in that runner's inbox.
+- Read the inbox: `runner msg read [--since <ts>] [--from <runner>]` — returns the calling runner's inbox (broadcasts + directs addressed to me), sorted by ULID.
 - No thread scoping in v0 — one flat stream per mission.
 - Messages are human-readable and runner-readable. They are the "what I think" layer; signals are the "please act" layer.
 
@@ -144,25 +144,25 @@ If v0 doesn't ship this flow working end-to-end, it hasn't shipped.
 
 Runners learn to check their inboxes through two mechanisms:
 
-1. **Convention.** Each runner's composed prompt instructs it to check `runners msg read` at natural task boundaries (before a new task, before emitting a signal, while waiting).
+1. **Convention.** Each runner's composed prompt instructs it to check `runner msg read` at natural task boundaries (before a new task, before emitting a signal, while waiting).
 2. **Signals as the wake-up channel.** If a sender needs immediate attention, they emit a signal in addition to (or instead of) the message. Signal routing through `inject_stdin` automatically enriches the injection with the recipient's unread inbox summary — so urgent wake-ups carry the related conversation with them. See `v0-arch.md` §5.5.1.
 
 ### 6.7 Coordination bus
-- Single append-only NDJSON file per mission at `$APPDATA/runners/crews/{crew_id}/missions/{mission_id}/events.ndjson`.
+- Single append-only NDJSON file per mission at `$APPDATA/runner/crews/{crew_id}/missions/{mission_id}/events.ndjson`.
 - Both signals and messages are persisted as events with `kind: "signal"` or `kind: "message"`.
 - File is watched with the `notify` crate. Orchestrator and UI both subscribe.
 - Tailable with `tail -f` for debugging. Per-mission file solves log rotation implicitly.
 
-### 6.8 `runners` CLI
+### 6.8 `runner` CLI
 
 ```
-runners signal <type> [--payload <json>] [--correlation-id <id>] [--causation-id <id>]
-runners msg    post <text> [--to <runner>] [--correlation-id <id>] [--causation-id <id>]
-runners msg    read [--since <ts>] [--from <runner>]
-runners help
+runner signal <type> [--payload <json>] [--correlation-id <id>] [--causation-id <id>]
+runner msg    post <text> [--to <runner>] [--correlation-id <id>] [--causation-id <id>]
+runner msg    read [--since <ts>] [--from <runner>]
+runner help
 ```
 
-One binary, two verbs. Reads context (crew, mission, runner, log path) from env vars injected at PTY spawn. Bundled with the app; dropped at `$APPDATA/runners/bin/runners` on first run; PATH is prepended for each session so agents can invoke it unqualified.
+One binary, two verbs. Reads context (crew, mission, runner, log path) from env vars injected at PTY spawn. Bundled with the app; dropped at `$APPDATA/runner/bin/runner` on first run; PATH is prepended for each session so agents can invoke it unqualified.
 
 See `v0-arch.md` §5.3 for the full three-layer emission mechanism (system prompt → CLI on PATH → role brief examples).
 
@@ -174,7 +174,7 @@ See `v0-arch.md` §5.3 for the full three-layer emission mechanism (system promp
   [
     { "when": { "signal": "review_requested" },
       "do": { "action": "inject_stdin", "target": "reviewer",
-              "template": "A review is pending — run `runners msg read` for context." } },
+              "template": "A review is pending — run `runner msg read` for context." } },
     { "when": { "signal": "changes_requested" },
       "do": { "action": "ask_human",
               "prompt": "Reviewer requested changes. Accept or override?",
@@ -222,7 +222,7 @@ Each message is labeled with direction: sender and recipient (or "all" for broad
 The pane has two view modes, toggled at the pane header:
 
 - **All** (default) — flat chronological list of every message event in the mission.
-- **Inbox** — scoped to the currently-focused runner — shows only what that runner would get from `runners msg read` (broadcasts + directs addressed to it). Useful for debugging "did agent X actually see this message?"
+- **Inbox** — scoped to the currently-focused runner — shows only what that runner would get from `runner msg read` (broadcasts + directs addressed to it). Useful for debugging "did agent X actually see this message?"
 
 Clicking a message highlights any signal it correlates with (via `correlation_id` / `causation_id`) in the signals pane, so the operator can follow cause-and-effect threads across the mission.
 
@@ -284,7 +284,7 @@ Signals and messages live in the mission's NDJSON file, not in SQLite. SQLite is
 - **Frontend:** React 19, TypeScript, Tailwind 4, xterm.js, React Router.
 - **Coordination bus:** NDJSON file per mission.
 - **Orchestrator:** Rust module in the Tauri backend, subscribes to the mission's event file via `notify`.
-- **`runners` CLI:** small Rust binary, bundled with the app, dropped at `$APPDATA/runners/bin/runners`, PATH-prepended per session.
+- **`runner` CLI:** small Rust binary, bundled with the app, dropped at `$APPDATA/runner/bin/runner`, PATH-prepended per session.
 
 ## 9. Open questions
 
@@ -299,14 +299,14 @@ Signals and messages live in the mission's NDJSON file, not in SQLite. SQLite is
 
 - **PTY flakiness across platforms** — especially Windows. v0 targets macOS only; Linux best-effort; Windows deferred.
 - **TUI rendering in xterm.js** — claude/codex use rich TUIs. Budget time for tuning.
-- **Runners that don't know the `runners signal` / `runners msg` conventions** — they can't coordinate. Ship starter briefs / system-prompt snippets per runtime.
+- **Runners that don't know the `runner signal` / `runner msg` conventions** — they can't coordinate. Ship starter briefs / system-prompt snippets per runtime.
 
 ## 11. Done criteria
 
 v0 ships when:
 - [ ] A user can create a crew, spawn two runners, click Start Mission, and see two live terminals.
-- [ ] Runners can emit signals via `runners signal` and the UI shows them in the signal log.
-- [ ] Runners can post and read messages via `runners msg`, and the UI shows the live messages pane.
+- [ ] Runners can emit signals via `runner signal` and the UI shows them in the signal log.
+- [ ] Runners can post and read messages via `runner msg`, and the UI shows the live messages pane.
 - [ ] A rule-based policy can route a signal into another runner's stdin.
 - [ ] A rule-based policy can pause the mission and ask the human a question, then resume based on the answer.
 - [ ] End Mission terminates all sessions, marks the mission completed, and the crew page shows it in history.

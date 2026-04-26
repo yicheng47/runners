@@ -330,7 +330,7 @@ mod tests {
     fn migrations_are_idempotent_on_reopen() {
         use tempfile::tempdir;
         let dir = tempdir().unwrap();
-        let path = dir.path().join("runners.db");
+        let path = dir.path().join("runner.db");
 
         {
             let _pool = open_pool(&path).unwrap();
