@@ -27,11 +27,13 @@ pub fn system_prompt_args(runtime: &str, system_prompt: Option<&str>) -> Vec<Str
         // onto its built-in default rather than replacing it, which is what
         // we want — we're appending the runner's brief, not overwriting.
         "claude-code" => vec!["--append-system-prompt".into(), prompt.to_string()],
-        // codex's analogue. Per its CLI docs, the flag is --instructions.
-        "codex" => vec!["--instructions".into(), prompt.to_string()],
-        // shell / unknown — no flag. The prompt is still discoverable on
-        // the runner row; the user will configure their wrapper script
-        // themselves if they want it injected.
+        // codex / shell / unknown — no flag. We tried `codex --instructions`
+        // first but the installed Codex CLI rejects it ("unexpected argument
+        // --instructions found"). Until a verified prompt mechanism lands
+        // (e.g. a documented flag on a pinned Codex version, or a wrapper
+        // script convention), Codex runners spawn without the brief; the
+        // prompt is still on the runner row and the user can configure
+        // their own wrapper. Tracked for follow-up.
         _ => Vec::new(),
     }
 }
@@ -47,9 +49,11 @@ mod tests {
     }
 
     #[test]
-    fn codex_uses_instructions_flag() {
-        let args = system_prompt_args("codex", Some("be helpful"));
-        assert_eq!(args, vec!["--instructions", "be helpful"]);
+    fn codex_runtime_omits_flag_until_verified_mechanism() {
+        // The installed `codex` CLI rejects `--instructions`. Until a
+        // documented prompt flag is verified, the codex runtime degrades
+        // to no-flag rather than crashing the spawn.
+        assert!(system_prompt_args("codex", Some("be helpful")).is_empty());
     }
 
     #[test]

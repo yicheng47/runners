@@ -71,8 +71,8 @@ pub(crate) struct RosterRow {
     lead: bool,
 }
 
-/// Mutable per-mission state. Rebuilt on reopen by replaying the log
-/// through `handle_event` — no separate persistence layer.
+/// Mutable per-mission state. Rebuilt on reopen by replaying the log into
+/// `reconstruct_from_log` — no separate persistence layer.
 #[derive(Default)]
 struct RouterState {
     /// Resolved at mount from the spawned `SpawnedSession` rows. The map is
@@ -81,11 +81,19 @@ struct RouterState {
     /// `mission_warning` (the desired behavior — better than silently
     /// dropping a `human_response`).
     session_by_handle: HashMap<String, String>,
-    /// `ask_human.id` → asker handle. Populated when an `ask_human` event
-    /// is observed; consumed when a matching `human_response` arrives.
+    /// `human_question.id` → asker handle. Populated when an `ask_human`
+    /// is dispatched (the appended card's id is the canonical question_id
+    /// per arch §5.5.0) and consumed by the matching `human_response`.
     pending_asks: HashMap<String, String>,
     /// Latest `runner_status` per handle.
     status: HashMap<String, RunnerStatus>,
+    /// Replay high-water ULID. Set by `reconstruct_from_log` on reopen;
+    /// `handle_event` short-circuits any event whose `id` is `≤` this so
+    /// the bus's initial replay doesn't re-inject historical stdin or
+    /// re-emit `human_question` cards. `None` for fresh missions: the
+    /// opening `mission_goal` event must reach the live dispatcher to
+    /// bootstrap the lead.
+    replay_high_water: Option<String>,
 }
 
 /// One mission's router. Mounted by `mission_start` after sessions spawn,
@@ -148,8 +156,11 @@ impl Router {
 
     /// Register the spawned session ids so handlers can find which PTY
     /// owns each handle. Called once after `mission_start`'s spawn loop
-    /// succeeds — the router is mounted earlier (so it can observe replay)
-    /// but stdin pushes need session ids to land somewhere.
+    /// succeeds. Live `mission_start` calls `register_sessions` *before*
+    /// the bus mounts so the initial replay's `mission_goal` lands on a
+    /// fully-wired router; reopen paths register against existing live
+    /// PTYs (when reattach lands) or skip injection (the workspace
+    /// surfaces `mission_warning` from `inject_to_handle` either way).
     pub fn register_sessions(&self, sessions: &[(String, String)]) {
         let mut state = self.state.lock().unwrap();
         for (handle, session_id) in sessions {
@@ -159,12 +170,103 @@ impl Router {
         }
     }
 
+    /// Reopen path only — fold historical projection state from the log
+    /// without firing handler side effects, and set the replay high-water
+    /// mark so the subsequent bus mount's initial replay no-ops past it.
+    ///
+    /// What is rebuilt:
+    /// - `pending_asks` from `ask_human` → `human_question` pairs (the
+    ///   card id is the canonical `question_id`; we walk in append order
+    ///   to match each ask with its following card via
+    ///   `human_question.payload.triggered_by`). Asks already answered
+    ///   by a `human_response` are removed.
+    /// - `runner_status` from the latest `runner_status` row per handle.
+    ///
+    /// What is *not* rebuilt: stdin pushes. The launch prompt, ask_lead
+    /// relays, human_said echoes, and idle nudges are all live-only side
+    /// effects. Per the C8 plan, replay does not re-inject prompts into
+    /// a sleeping LLM.
+    ///
+    /// **MUST NOT be called for fresh missions.** Setting the watermark
+    /// over the just-written opening `mission_goal` would cause the bus
+    /// initial replay to no-op the bootstrap injection, leaving the lead
+    /// without its launch prompt.
+    pub fn reconstruct_from_log(&self) -> Result<()> {
+        let entries = self.log.read_from(0)?;
+
+        // Walk once, building a transient ask_human.id → asker map so we
+        // can pair the next human_question with the right asker. Once the
+        // pairing lands in pending_asks, the ask_human.id is no longer
+        // needed.
+        let mut ask_human_asker: HashMap<String, String> = HashMap::new();
+        let mut pending: HashMap<String, String> = HashMap::new();
+        let mut status: HashMap<String, RunnerStatus> = HashMap::new();
+        let mut last_id: Option<String> = None;
+
+        for entry in &entries {
+            let event = &entry.event;
+            last_id = Some(event.id.clone());
+            if !matches!(event.kind, EventKind::Signal) {
+                continue;
+            }
+            let Some(t) = event.signal_type.as_ref() else {
+                continue;
+            };
+            match t.as_str() {
+                "ask_human" => {
+                    ask_human_asker.insert(event.id.clone(), event.from.clone());
+                }
+                "human_question" => {
+                    let triggered_by = event
+                        .payload
+                        .get("triggered_by")
+                        .and_then(|v| v.as_str());
+                    if let Some(ask_id) = triggered_by {
+                        if let Some(asker) = ask_human_asker.remove(ask_id) {
+                            pending.insert(event.id.clone(), asker);
+                        }
+                    }
+                }
+                "human_response" => {
+                    if let Some(qid) = event
+                        .payload
+                        .get("question_id")
+                        .and_then(|v| v.as_str())
+                    {
+                        pending.remove(qid);
+                    }
+                }
+                "runner_status" => {
+                    let s = match event.payload.get("state").and_then(|v| v.as_str()) {
+                        Some("busy") => Some(RunnerStatus::Busy),
+                        Some("idle") => Some(RunnerStatus::Idle),
+                        _ => None,
+                    };
+                    if let Some(s) = s {
+                        status.insert(event.from.clone(), s);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut state = self.state.lock().unwrap();
+        state.pending_asks = pending;
+        state.status = status;
+        state.replay_high_water = last_id;
+        Ok(())
+    }
+
     pub fn lead_handle(&self) -> &str {
         &self.launch.lead.handle
     }
 
     /// Single dispatcher entry point. Bus calls this for every appended
     /// event in arrival order. Messages return early per arch §5.5.0.
+    /// On reopen, events at-or-below the replay high-water mark are
+    /// short-circuited so the bus's initial replay doesn't re-inject
+    /// historical stdin or re-emit cards (arch §5.5: "stdin pushes are
+    /// deliberately silent" + plan's projection-only replay).
     pub fn handle_event(&self, event: &Event) {
         if !matches!(event.kind, EventKind::Signal) {
             return;
@@ -172,6 +274,15 @@ impl Router {
         let Some(signal) = event.signal_type.as_ref() else {
             return;
         };
+        // Watermark check before signal-type match: covers every handler
+        // (mission_goal, human_said, ask_lead, ask_human, human_response,
+        // runner_status) in one place. Lex-compare on bytes; ULIDs sort
+        // lex-correct.
+        if let Some(w) = self.state.lock().unwrap().replay_high_water.as_deref() {
+            if event.id.as_bytes() <= w.as_bytes() {
+                return;
+            }
+        }
         match signal.as_str() {
             "mission_goal" => handlers::mission_goal(self, event),
             "human_said" => handlers::human_said(self, event),
@@ -243,18 +354,22 @@ impl Router {
         }
     }
 
+    /// Append a `human_question` event for the workspace UI and return its
+    /// id. Per arch §5.5.0 the canonical `question_id` is the appended
+    /// event's own `id`; `human_response.payload.question_id` references
+    /// that. We deliberately do *not* echo `question_id` into the payload —
+    /// the spec calls that "echoed here for convenience" and constructing
+    /// it would require knowing the id before append. Consumers should
+    /// read `event.id`. `triggered_by` ties the card back to the
+    /// originating `ask_human` for replay reconstruction and audit.
     pub(crate) fn append_human_question(
         &self,
         ask_human_id: &str,
         prompt: &str,
         choices: &serde_json::Value,
         on_behalf_of: Option<&str>,
-    ) {
+    ) -> Option<String> {
         let mut payload = serde_json::Map::new();
-        payload.insert(
-            "question_id".into(),
-            serde_json::Value::String(ask_human_id.to_string()),
-        );
         payload.insert(
             "triggered_by".into(),
             serde_json::Value::String(ask_human_id.to_string()),
@@ -277,11 +392,15 @@ impl Router {
             SignalType::new("human_question"),
             serde_json::Value::Object(payload),
         );
-        if let Err(e) = self.log.append(draft) {
-            eprintln!(
-                "router[{}]: failed to append human_question: {e}",
-                self.mission_id
-            );
+        match self.log.append(draft) {
+            Ok(ev) => Some(ev.id),
+            Err(e) => {
+                eprintln!(
+                    "router[{}]: failed to append human_question: {e}",
+                    self.mission_id
+                );
+                None
+            }
         }
     }
 }

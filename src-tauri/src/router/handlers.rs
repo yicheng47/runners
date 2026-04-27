@@ -115,13 +115,18 @@ pub(super) fn ask_human(router: &Router, event: &Event) {
         .get("on_behalf_of")
         .and_then(|v| v.as_str());
 
-    // The asker is always the runner that emitted the `ask_human` signal —
-    // typically the lead in the lead-mediated flow, or a worker in the
-    // direct-fallback flow. Stored under the ask_human event's id so the
-    // matching `human_response` (which carries `payload.question_id =
-    // ask_human.id`) can route back to the right asker.
-    router.record_pending_ask(event.id.clone(), event.from.clone());
-    router.append_human_question(&event.id, prompt, &choices, on_behalf_of);
+    // Append the `human_question` card first; its id is the canonical
+    // `question_id` per arch §5.5.0. The asker is the runner that emitted
+    // the `ask_human` signal (typically the lead, or a worker in the
+    // direct-fallback flow). Pending-ask map is keyed on the *card* id so
+    // a matching `human_response` (which carries
+    // `payload.question_id = human_question.id`) routes back to the
+    // original asker. If the append fails, no mapping is recorded — the
+    // human_response would have nothing to reference anyway, and the
+    // failure is already logged inside `append_human_question`.
+    if let Some(card_id) = router.append_human_question(&event.id, prompt, &choices, on_behalf_of) {
+        router.record_pending_ask(card_id, event.from.clone());
+    }
 }
 
 pub(super) fn human_response(router: &Router, event: &Event) {

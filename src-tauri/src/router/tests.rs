@@ -265,7 +265,11 @@ fn ask_human_appends_human_question_card_and_records_pending_ask() {
         .unwrap();
     router.handle_event(&ev);
 
-    // Append a `human_question` event referencing the original ask.
+    // Append a `human_question` event referencing the original ask. Per
+    // arch §5.5.0, the canonical `question_id` is the card event's own
+    // `id`; `triggered_by` ties it back to the originating `ask_human`.
+    // The convenience-echo `payload.question_id` is intentionally absent
+    // because the id isn't known until after append.
     let signals = read_signals(&log);
     let card = signals
         .iter()
@@ -280,8 +284,11 @@ fn ask_human_appends_human_question_card_and_records_pending_ask() {
     assert_eq!(card.payload["prompt"], "Approve?");
     assert_eq!(card.payload["choices"], serde_json::json!(["yes", "no"]));
     assert_eq!(card.payload["on_behalf_of"], "impl");
-    assert_eq!(card.payload["question_id"], ev.id);
     assert_eq!(card.payload["triggered_by"], ev.id);
+    assert!(
+        card.payload.get("question_id").is_none(),
+        "question_id is the event's own id; not echoed in payload"
+    );
 }
 
 #[test]
@@ -303,11 +310,24 @@ fn human_response_routes_back_to_asker() {
         .unwrap();
     router.handle_event(&ask);
 
+    // human_response.payload.question_id is the human_question.id (arch
+    // §5.5.0), not the ask_human.id. Find the card the router appended.
+    let card_id = read_signals(&log)
+        .into_iter()
+        .find(|s| {
+            s.signal_type
+                .as_ref()
+                .map(|t| t.as_str() == "human_question")
+                .unwrap_or(false)
+        })
+        .expect("router must append human_question")
+        .id;
+
     let resp = log
         .append(signal(
             "human",
             "human_response",
-            serde_json::json!({ "question_id": ask.id, "choice": "yes" }),
+            serde_json::json!({ "question_id": card_id, "choice": "yes" }),
         ))
         .unwrap();
     router.handle_event(&resp);
@@ -323,7 +343,7 @@ fn human_response_routes_back_to_asker() {
         .append(signal(
             "human",
             "human_response",
-            serde_json::json!({ "question_id": ask.id, "choice": "no" }),
+            serde_json::json!({ "question_id": card_id, "choice": "no" }),
         ))
         .unwrap();
     router.handle_event(&dup);
@@ -422,9 +442,10 @@ fn runner_status_idle_for_worker_notifies_lead_and_busy_does_not() {
 
 #[test]
 fn pending_ask_map_reconstructs_from_log_on_reopen() {
-    // Append `ask_human`, drop the router, build a fresh one, replay the log
-    // through it, then append `human_response`. The answer must still route
-    // to the asker — no separate persistence required.
+    // Mount router #1, dispatch ask_human (which appends human_question),
+    // drop. Mount router #2, call reconstruct_from_log (the reopen entry
+    // point), then route human_response. The answer must still reach the
+    // original asker — no separate persistence layer.
     let dir = tempfile::tempdir().unwrap();
     let log = Arc::new(EventLog::open(dir.path()).unwrap());
     let roster = vec![crew_runner("lead", true), crew_runner("impl", false)];
@@ -441,7 +462,7 @@ fn pending_ask_map_reconstructs_from_log_on_reopen() {
         ))
         .unwrap();
 
-    // First mount processes only the ask, then is dropped.
+    // First mount handles the ask live (appends human_question).
     {
         let injector = Arc::new(RecordingInjector::default());
         let injector_dyn: Arc<dyn StdinInjector> = injector.clone();
@@ -461,9 +482,21 @@ fn pending_ask_map_reconstructs_from_log_on_reopen() {
         ]);
         router.handle_event(&ask);
     }
+    // Capture the card id router #1 produced; we'll use it as
+    // human_response.payload.question_id below.
+    let card_id = read_signals(&log)
+        .into_iter()
+        .find(|s| {
+            s.signal_type
+                .as_ref()
+                .map(|t| t.as_str() == "human_question")
+                .unwrap_or(false)
+        })
+        .expect("router #1 must have appended human_question")
+        .id;
 
-    // Second mount: replay the log up to and including the ask, then route
-    // the response.
+    // Reopen: build router #2, fold projection state from history. This
+    // is the path mission_resume / mount-on-app-restart will follow.
     let injector = Arc::new(RecordingInjector::default());
     let injector_dyn: Arc<dyn StdinInjector> = injector.clone();
     let router2 = Router::new(
@@ -480,19 +513,40 @@ fn pending_ask_map_reconstructs_from_log_on_reopen() {
         ("lead".into(), "S-LEAD".into()),
         ("impl".into(), "S-IMPL".into()),
     ]);
-    // Mirror what `BusEmitter` would do during initial replay: feed every
-    // historical envelope through `handle_event`. The router has no
-    // dispatch ledger — it just rebuilds the pending-ask map from the
-    // ask_human row it sees.
+    router2.reconstruct_from_log().unwrap();
+
+    // Replay the historical events through handle_event the way the bus's
+    // initial replay would. The watermark must short-circuit them so the
+    // ask_human is NOT re-handled (no second human_question card in the
+    // log) and the lead is NOT re-injected with anything.
+    let card_count_before = read_signals(&log)
+        .iter()
+        .filter(|s| s.signal_type.as_ref().map(|t| t.as_str() == "human_question").unwrap_or(false))
+        .count();
     for entry in log.read_from(0).unwrap() {
         router2.handle_event(&entry.event);
     }
+    let card_count_after = read_signals(&log)
+        .iter()
+        .filter(|s| s.signal_type.as_ref().map(|t| t.as_str() == "human_question").unwrap_or(false))
+        .count();
+    assert_eq!(
+        card_count_before, card_count_after,
+        "replay must NOT re-emit human_question cards",
+    );
+    assert!(
+        injector.all_pushes().is_empty(),
+        "replay must NOT re-inject historical stdin; got {:?}",
+        injector.all_pushes(),
+    );
 
+    // Now post a *new* response (id strictly greater than the watermark)
+    // and assert it routes to the asker the reconstruct path recovered.
     let resp = log
         .append(signal(
             "human",
             "human_response",
-            serde_json::json!({ "question_id": ask.id, "choice": "yes" }),
+            serde_json::json!({ "question_id": card_id, "choice": "yes" }),
         ))
         .unwrap();
     router2.handle_event(&resp);
@@ -500,8 +554,134 @@ fn pending_ask_map_reconstructs_from_log_on_reopen() {
     let lead_pushes = injector.pushes_for("S-LEAD");
     assert!(
         lead_pushes.iter().any(|p| p.contains("[human_response] yes")),
-        "after reopen + replay, response must route to original asker; got {lead_pushes:?}",
+        "after reopen + reconstruct, response must route to original asker; got {lead_pushes:?}",
     );
+}
+
+#[test]
+fn reconstruct_recovers_latest_runner_status_only() {
+    // Reopen-path test for arch §5.5.1: latest reported state per handle.
+    // busy → idle → busy must leave status[impl] = Busy after reconstruct,
+    // and no historical idle-notice should re-inject into the lead.
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(EventLog::open(dir.path()).unwrap());
+    let roster = vec![crew_runner("lead", true), crew_runner("impl", false)];
+
+    log.append(signal(
+        "impl",
+        "runner_status",
+        serde_json::json!({ "state": "busy" }),
+    ))
+    .unwrap();
+    log.append(signal(
+        "impl",
+        "runner_status",
+        serde_json::json!({ "state": "idle", "note": "first idle" }),
+    ))
+    .unwrap();
+    log.append(signal(
+        "impl",
+        "runner_status",
+        serde_json::json!({ "state": "busy" }),
+    ))
+    .unwrap();
+
+    let injector = Arc::new(RecordingInjector::default());
+    let injector_dyn: Arc<dyn StdinInjector> = injector.clone();
+    let router = Router::new(
+        "mission-1".into(),
+        "crew-1".into(),
+        "Crew One".into(),
+        &roster,
+        vec![],
+        log.clone(),
+        injector_dyn,
+    )
+    .unwrap();
+    router.register_sessions(&[
+        ("lead".into(), "S-LEAD".into()),
+        ("impl".into(), "S-IMPL".into()),
+    ]);
+    router.reconstruct_from_log().unwrap();
+
+    // Bus replay of the historical events must short-circuit; no idle
+    // notice is pushed to the lead, even though one of them is `idle`.
+    for entry in log.read_from(0).unwrap() {
+        router.handle_event(&entry.event);
+    }
+    assert!(
+        injector.all_pushes().is_empty(),
+        "historical idle must not push to lead on replay; got {:?}",
+        injector.all_pushes(),
+    );
+
+    // A *new* idle event after the watermark must push normally — proves
+    // the watermark only suppresses history, not live tail.
+    let live_idle = log
+        .append(signal(
+            "impl",
+            "runner_status",
+            serde_json::json!({ "state": "idle", "note": "live" }),
+        ))
+        .unwrap();
+    router.handle_event(&live_idle);
+    let lead_pushes = injector.pushes_for("S-LEAD");
+    assert_eq!(lead_pushes.len(), 1);
+    assert!(lead_pushes[0].contains("@impl is idle"));
+    assert!(lead_pushes[0].contains("live"));
+}
+
+#[test]
+fn fresh_mission_start_does_not_call_reconstruct_so_mission_goal_fires() {
+    // Regression on the reviewer's caveat: if a fresh-start mount called
+    // reconstruct_from_log() over the just-written opening events, the
+    // watermark would cover mission_goal and the lead would never receive
+    // its launch prompt. mission_start must skip reconstruct entirely.
+    // This test mirrors that path: pre-write opening events, build a
+    // router WITHOUT calling reconstruct, then replay through handle_event
+    // (what the bus does). The mission_goal handler must fire.
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(EventLog::open(dir.path()).unwrap());
+    let roster = vec![crew_runner("lead", true)];
+
+    log.append(signal(
+        "system",
+        "mission_start",
+        serde_json::json!({ "title": "fresh" }),
+    ))
+    .unwrap();
+    log.append(signal(
+        "human",
+        "mission_goal",
+        serde_json::json!({ "text": "go" }),
+    ))
+    .unwrap();
+
+    let injector = Arc::new(RecordingInjector::default());
+    let injector_dyn: Arc<dyn StdinInjector> = injector.clone();
+    let router = Router::new(
+        "mission-1".into(),
+        "crew-1".into(),
+        "Crew One".into(),
+        &roster,
+        vec![],
+        log.clone(),
+        injector_dyn,
+    )
+    .unwrap();
+    router.register_sessions(&[("lead".into(), "S-LEAD".into())]);
+    // NB: no reconstruct call. The bus's initial replay drives the
+    // bootstrap.
+    for entry in log.read_from(0).unwrap() {
+        router.handle_event(&entry.event);
+    }
+    let lead_pushes = injector.pushes_for("S-LEAD");
+    assert_eq!(
+        lead_pushes.len(),
+        1,
+        "mission_goal must fire on fresh start; got {lead_pushes:?}",
+    );
+    assert!(lead_pushes[0].contains("Goal: go"));
 }
 
 #[test]
