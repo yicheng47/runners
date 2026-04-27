@@ -1,0 +1,23 @@
+[package]
+name = "runner-cli"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+description = "Bundled `runner` CLI agents use to append signals/messages to a mission's NDJSON event log."
+
+# Bin name = "runner" so the on-disk file matches the PATH expectation in
+# `SessionManager::spawn` / `spawn_direct` ($APPDATA/runner/bin/runner).
+[[bin]]
+name = "runner"
+path = "src/main.rs"
+
+[dependencies]
+runner-core = { path = "../crates/runner-core" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

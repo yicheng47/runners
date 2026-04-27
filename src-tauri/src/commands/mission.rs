@@ -194,6 +194,14 @@ pub fn start(
     std::fs::create_dir_all(&mission_dir)?;
     write_signal_types_sidecar(app_data_dir, &crew.id, &crew.signal_types)?;
 
+    // Snapshot the roster into a per-mission sidecar so the CLI can
+    // validate `runner msg post --to <handle>` without DB access. The
+    // roster is frozen here at mission_start: later changes to crew
+    // membership do not retroactively invalidate `--to` lookups in this
+    // mission's log (per PR #19 reviewer guidance).
+    let roster_for_sidecar = crew_runner::list(&tx, &crew.id)?;
+    write_roster_sidecar(&mission_dir, &roster_for_sidecar)?;
+
     // Effective goal = override || crew default || "".
     let goal_text = input
         .goal_override
@@ -311,6 +319,41 @@ fn write_signal_types_sidecar(
     // `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` under the hood on Windows.
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     let json = serde_json::to_vec(allowlist)?;
+    tmp.write_all(&json)?;
+    tmp.flush()?;
+    tmp.persist(&target).map_err(|e| Error::Io(e.error))?;
+    Ok(())
+}
+
+/// Write the per-mission roster snapshot to `roster.json` next to
+/// `events.ndjson`. The CLI (`runner msg post --to`) reads this to
+/// validate handles without DB access. Frozen at mission_start: if the
+/// crew's membership changes mid-mission, the running mission still
+/// validates against this snapshot.
+///
+/// Atomic write via `tempfile::NamedTempFile::persist` — same dance as
+/// `write_signal_types_sidecar` — so a crash mid-write can't leave a
+/// half-formed file the CLI would parse-fail on.
+fn write_roster_sidecar(mission_dir: &Path, roster: &[crate::model::CrewRunner]) -> Result<()> {
+    use std::io::Write;
+
+    #[derive(serde::Serialize)]
+    struct RosterEntry<'a> {
+        handle: &'a str,
+        lead: bool,
+    }
+    let entries: Vec<RosterEntry> = roster
+        .iter()
+        .map(|m| RosterEntry {
+            handle: &m.runner.handle,
+            lead: m.lead,
+        })
+        .collect();
+
+    std::fs::create_dir_all(mission_dir)?;
+    let target = mission_dir.join("roster.json");
+    let mut tmp = tempfile::NamedTempFile::new_in(mission_dir)?;
+    let json = serde_json::to_vec(&entries)?;
     tmp.write_all(&json)?;
     tmp.flush()?;
     tmp.persist(&target).map_err(|e| Error::Io(e.error))?;

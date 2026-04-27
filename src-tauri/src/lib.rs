@@ -1,3 +1,4 @@
+mod cli_install;
 mod commands;
 mod db;
 mod error;
@@ -60,6 +61,16 @@ pub fn run() {
                     rusqlite::params![chrono::Utc::now().to_rfc3339()],
                 )?;
             }
+            // Drop the bundled `runner` CLI into $APPDATA/runner/bin/ so
+            // child PTYs find it on PATH (arch §5.3 Layer 2). Best-effort:
+            // a copy failure is logged and the app keeps running. Sessions
+            // spawned with no CLI on PATH will simply error out when they
+            // try to invoke `runner` — surfaced as a runtime stderr from
+            // the agent rather than a startup hang.
+            if let Err(e) = cli_install::install_runner_cli(&app_data_dir) {
+                eprintln!("runner: failed to install bundled CLI: {e}");
+            }
+
             app.manage(AppState {
                 db: pool,
                 app_data_dir,
