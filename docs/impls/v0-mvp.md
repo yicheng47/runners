@@ -4,12 +4,14 @@
 >
 > Companion to `docs/arch/v0-arch.md` (architecture) and `docs/arch/v0-prd.md` (scope). This file is the single source for both the MVP implementation plan and current build status.
 
-## Current status — 2026-04-26
+## Current status — 2026-04-27
 
+> **2026-04-27 update.** C8 (signal router v0) and C9 (`runner` CLI binary) are both merged. The router observes the bus, dispatches built-in signals to handlers (bootstrap, ask_lead/human_said relays, ask_human → human_question card, human_response routing, runner_status idle nudges), and reconstructs pending-ask + status state from the log on reopen via a high-water mark. The CLI exposes `signal`, `msg post`, `msg read`, `status`, and `help`; emits `inbox_read` correctly (skipped on `--from` filtered reads to avoid global-watermark corruption); validates against per-crew signal_types and per-mission roster sidecars. The bundled CLI is built by Tauri's `beforeDev`/`beforeBuild` hooks and installed into `$APPDATA/runner/bin/runner` at app startup. Remaining MVP work is the mission workspace UI (C10) and the Missions list + Start Mission modal (C11).
+>
 > **2026-04-26 plan revision.** C8 was reframed from "orchestrator v0" to "signal router v0" — a flat parent-process dispatcher, not a rule engine. The dispatch ledger, replay idempotence, inbox-summary enrichment, and policy loader were all explicitly descoped because the lead runner already owns coordination judgment; C8 only owns the plumbing (bootstrap, cross-process stdin push, UI bridge) the lead can't do from inside a child PTY. See **C8 — Signal router v0** below for the rationale and the descoped list. The cross-cutting prompt/runtime adapter is now part of C8 instead of a separate prerequisite.
 
 
-The persistence, configuration, PTY runtime, event log, event bus, and top-level runner/direct-chat surfaces are in place. The remaining MVP work is the coordination loop: prompt composition, the signal router that wires events to stdin pushes, UI cards, and runner availability updates, the `runner` CLI, mission workspace UI, and the final Start Mission entrypoint.
+The persistence, configuration, PTY runtime, event log, event bus, signal router, and `runner` CLI are all in place. The remaining MVP work is the mission workspace UI and the Start Mission entrypoint.
 
 ### Implemented
 
@@ -26,6 +28,8 @@ The persistence, configuration, PTY runtime, event log, event bus, and top-level
 | C8.5 Runner surfaces | #15 | `/runners`, `/runners/:handle`, direct-chat session backend, `runner_list_with_activity`, `runner/activity` live counters. |
 | Rename / namespace cleanup | #16 + follow-up | Project/crate/app namespace is singular `runner`; env vars are `RUNNER_*`; app data is under `$APPDATA/runner`; planned CLI binary is `runner`. SQL table names stay plural where they represent row collections. |
 | Direct-chat frontend hardening | #17 in review | xterm.js direct-chat pane, persistent sidebar SESSION list, PTY resize handshake, base64 raw PTY output for TUI fidelity. Two review follow-ups are open: reload reattach on the chat route itself, and waiting for output/exit listener registration before spawning. |
+| C8 Signal router v0 + runtime adapter | #18 | Flat parent-process dispatcher (`src-tauri/src/router/`): handlers for `mission_goal`, `human_said`, `ask_lead`, `ask_human`, `human_response`, `runner_status`. Pending-ask + status maps reconstruct on reopen via a replay high-water ULID; live tail short-circuits at-or-below the watermark. Runtime adapter wires `runner.system_prompt` into both mission and direct-chat spawn paths (claude-code → `--append-system-prompt`; codex deferred until a verified flag exists). |
+| C9 `runner` CLI binary | #19 | New `cli/` workspace member produces `runner-cli`, installed at app startup as `$APPDATA/runner/bin/runner` (rename on copy). Verbs: `signal`, `msg post`, `msg read`, `status`, `help`. Validates against per-crew `signal_types.json` and per-mission `roster.json` sidecars (frozen at mission_start). `inbox_read` is suppressed on `--from` filtered reads to avoid corrupting the global per-runner watermark. Tauri's `beforeDev`/`beforeBuild` build the CLI alongside the app so the dev install path needs no manual cargo step. |
 
 ### What runs today
 
@@ -33,15 +37,15 @@ The persistence, configuration, PTY runtime, event log, event bus, and top-level
 - **Direct chat:** Users can open a top-level runner, start a direct PTY session, type through xterm.js, resize the terminal, and stop the session. Direct chats do not join any mission event bus.
 - **Mission start/stop backend:** `mission_start` creates a mission row, writes opening events, mounts the event bus, and spawns one PTY child per crew member. `mission_stop` appends the terminal event, kills/reaps sessions, and unmounts the bus.
 - **Event transport:** Mission logs are durable NDJSON files at `$APPDATA/runner/crews/{crew_id}/missions/{mission_id}/events.ndjson`; the in-process bus replays and tails them into Tauri events.
-- **Tests:** Current checks on PR #17: `pnpm exec tsc --noEmit`, `pnpm run lint`, and `cargo test --workspace` all pass. Backend coverage is 84 tests across the Tauri app and `runner-core`.
+- **Coordination loop:** Spawned mission runners get the composed launch prompt injected into the lead's stdin on `mission_goal`; workers escalate via `ask_lead`; the lead can `ask_human` for HITL cards; `human_response` routes back to the asker; non-lead `runner_status idle` reports nudge the lead.
+- **CLI:** The bundled `runner` binary is dropped into `$APPDATA/runner/bin/` at app startup. Spawned agents can `runner signal`, `runner msg post`, `runner msg read`, `runner status`. Direct-chat sessions (no env vars) no-op cleanly.
+- **Tests:** `pnpm exec tsc --noEmit`, `pnpm run lint`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` all pass. Backend coverage is 87 Tauri-app tests + 24 CLI tests (11 unit + 13 integration) + 20 runner-core tests.
 
 ### Known gaps in implemented surfaces
 
-- **Runner `system_prompt` is stored and displayed but not passed to the runtime.** `runner.system_prompt` is accepted by create/update forms and shown on Runner Detail, but `SessionManager::spawn` and `spawn_direct` currently launch only `runner.command + runner.args`. No runtime adapter adds `--append-system-prompt` for Claude Code or the Codex equivalent yet. This must be fixed before claiming the default system prompt is "used whenever this runner spawns."
-- **Mission prompt composition does not exist yet.** The architecture says the launch prompt is `runner.system_prompt + mission goal + roster + coordination instructions + signal allowlist`, but the current C6/C8 boundary only starts PTYs and appends `mission_goal`. Nothing injects the composed prompt into the child.
-- **No runner-to-runner CLI yet.** The app prepends `$APPDATA/runner/bin` to `PATH`, but there is no `runner` binary installed there, so agents cannot emit `runner signal` or `runner msg` events.
-- **No signal router yet.** The event bus emits events, but no code consumes them to wake the lead, route `ask_lead`, render `ask_human`, inject `human_response`, or surface runner availability updates. Tracked as C8.
-- **No mission workspace UI or Start Mission UI yet.** The backend commands exist; the polished `/missions` entrypoint and workspace are still missing.
+- **No mission workspace UI or Start Mission UI yet.** The backend commands and the router are wired end-to-end; what's missing is the polished `/missions` entrypoint and the workspace pane that renders the event feed, ask-human cards, runner rail, and embedded xterms. Tracked as C10 + C11.
+- **Production sidecar packaging.** The dev path now installs the bundled CLI into `$APPDATA/runner/bin/` via Tauri's `beforeDev` hook. Production installer builds (`tauri build`) do not yet ship the CLI as a `bundle.externalBin` sidecar — needs a build-step that stages `runner-cli-<target-triple>` for the bundler. v0 ships in dev; this is a release-engineering follow-up that doesn't affect the demo path.
+- **Codex `system_prompt` flag.** The runtime adapter currently emits `--append-system-prompt` only for the `claude-code` runtime; `codex --instructions` was tried first but the installed Codex CLI rejected it. Codex runners spawn without their `system_prompt` until a verified flag is identified.
 
 ### Integrated C5.5 amendment context
 
